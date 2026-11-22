@@ -227,6 +227,11 @@ function makeEngine(kind, workerFile, statusEl, timeoutMs) {
       } else if (d.type === 'load-error') {
         loading = false; setStatus('فشل التحميل — سيُعاد عند الحاجة', 'err');
         kill();
+      } else if (d.type === kind + '-partial') {
+        // بثّ تدريجي (1.3): وحدة مكتملة من طلب قائم — تُمرَّر لمستهلكها فورًا
+        // ويُعاد تسليح حارس الوقت (الجزئيات دليل حياة العامل).
+        var pp = pending[d.id];
+        if (pp) { pp.rearm(); if (pp.partial) pp.partial(d); }
       } else if (d.type === kind + '-done' || d.type === kind + '-error') {
         var p = pending[d.id];
         if (!p) return;
@@ -250,16 +255,21 @@ function makeEngine(kind, workerFile, statusEl, timeoutMs) {
   }
   var engine = {
     onready: null,
-    request: function (msg) {
+    request: function (msg, onPartial) {
       return new Promise(function (resolve, reject) {
         var id = ++seq;
-        var timer = setTimeout(function () {
-          if (pending[id]) { delete pending[id]; kill(); reject(new Error('timeout')); }
-        }, timeoutMs);
-        pending[id] = { done: resolve, fail: reject, timer: timer };
+        var entry = { done: resolve, fail: reject, partial: onPartial || null, timer: null };
+        entry.rearm = function () {
+          clearTimeout(entry.timer);
+          entry.timer = setTimeout(function () {
+            if (pending[id]) { delete pending[id]; kill(); reject(new Error('timeout')); }
+          }, timeoutMs);
+        };
+        entry.rearm();
+        pending[id] = entry;
         msg.id = id;
         try { ensure().postMessage(msg); }
-        catch (e) { clearTimeout(timer); delete pending[id]; reject(e); }
+        catch (e) { clearTimeout(entry.timer); delete pending[id]; reject(e); }
       });
     },
     preload: function () { try { ensure(); } catch (e) {} }
@@ -280,6 +290,7 @@ window.__ttsCallback = function (id, ok, err) {
   if (cb) cb(!!ok, err || '');
 };
 var speaking = false;
+var speechGen = 0; // جيل جلسات النطق: أي إيقاف أو جلسة جديدة تُلغي الطوابير السابقة
 function speakNative(text, voiceId) {
   return new Promise(function (resolve) {
     if (!window.VoiceBridge || !text) { resolve(false); return; }
@@ -291,7 +302,41 @@ function speakNative(text, voiceId) {
   });
 }
 function stopNative() {
+  speechGen++; // إلغاء أي طابور نطق جارٍ أيضًا
   if (window.VoiceBridge) { try { VoiceBridge.stopSpeak(); } catch (e) {} }
+}
+// جلسة نطق متدفقة (1.3): صوت الهدف يُثبَّت عند بدء الجلسة، والجمل تُنطق
+// بالترتيب في طابور بينما ترجمة ما بعدها ما تزال جارية. الإيقاف (stopNative)
+// أو جلسة أحدث يُلغي الطابور عبر speechGen — فلا نطق متأخرًا خارج دوره.
+function startSpeechSession(S) {
+  var O = sides[otherKey(S.key)];
+  var voice = O.el.voice.value;
+  var gen = ++speechGen;
+  var queue = [], active = false, finished = false;
+  function pump() {
+    if (gen !== speechGen || active) return;
+    var next = queue.shift();
+    if (next === undefined) {
+      if (finished) setStatus(S, 'تمت الترجمة والنطق ✓');
+      return;
+    }
+    active = true;
+    speakNative(next, voice).then(function (ok) {
+      active = false;
+      if (gen !== speechGen) return;
+      if (!ok) { setStatus(S, 'تعذّر النطق'); return; }
+      pump();
+    });
+  }
+  return {
+    push: function (t) { if (gen === speechGen && t) { queue.push(t); pump(); } },
+    finish: function () {
+      finished = true;
+      if (gen === speechGen && (active || queue.length)) setStatus(S, 'تمت الترجمة — جارٍ النطق…');
+      pump();
+    },
+    cancel: function () { if (gen === speechGen) speechGen++; }
+  };
 }
 function copyNative(text, btn) {
   if (!text) return;
@@ -513,7 +558,10 @@ function finishRecording(S, auto) {
   });
 }
 
-// ترجمة نص الطرف S إلى لغة الطرف الآخر ثم نطقه بصوت الطرف الآخر
+// ترجمة نص الطرف S إلى لغة الطرف الآخر ثم نطقه بصوت الطرف الآخر.
+// بثّ تدريجي (1.3): كل جملة تُعرض فور وصولها وتدخل طابور النطق فورًا، فلا
+// ينتظر المستخدم اكتمال كل الجمل ليسمع أولها. النتيجة النهائية الكاملة من
+// العامل (mt-done) تبقى هي الموثّقة في الصندوق وlastTranslation.
 function runTranslation(S, speakAfter) {
   var text = S.el.heard.value.trim();
   if (!text) { setStatus(S, 'لا نص بعد — تحدّث أو اكتب أولًا'); return; }
@@ -531,22 +579,68 @@ function runTranslation(S, speakAfter) {
   if (exact) { done(exact[tgt]); return; }
   if (src === tgt) { done(text); return; }
   setStatus(S, 'جارٍ الترجمة…');
-  mtEngine.request({ type: 'mt', text: text, srcLang: LANGS[src].nllb, tgtLang: LANGS[tgt].nllb })
-    .then(done)
-    .catch(function () { setStatus(S, 'تعذّرت الترجمة — أعد المحاولة'); });
+  S.lastTranslation = '';
+  S.el.translation.textContent = '';
+  var parts = [], arrived = 0;
+  var session = speakAfter ? startSpeechSession(S) : null;
+  mtEngine.request({ type: 'mt', text: text, srcLang: LANGS[src].nllb, tgtLang: LANGS[tgt].nllb },
+    function (p) {
+      // جزئية وصلت (مرتبة حتمًا): اعرضها فورًا وادفعها لطابور النطق
+      parts[p.index] = p.text;
+      arrived++;
+      var shown = parts.filter(function (x) { return typeof x === 'string'; }).join(' ');
+      S.lastTranslation = shown;
+      S.el.translation.textContent = shown;
+      setStatus(S, 'تُرجمت ' + arrived + ' من ' + p.total + (speakAfter ? ' — النطق يتدفق…' : '…'));
+      if (session) session.push(p.text);
+    })
+    .then(function (result) {
+      S.lastTranslation = result;
+      S.el.translation.textContent = result;
+      if (session) session.finish();
+      else setStatus(S, 'تمت الترجمة');
+    })
+    .catch(function () {
+      if (session) session.cancel();
+      setStatus(S, 'تعذّرت الترجمة — أعد المحاولة');
+    });
 }
-// نطق ترجمة الطرف S بصوت الطرف الآخر ولغته
+// نطق ترجمة الطرف S بصوت الطرف الآخر ولغته (عبر جلسة نطق من جملة واحدة)
 function speakFor(S, text) {
-  var O = sides[otherKey(S.key)];
-  var voice = O.el.voice.value;
-  speakNative(text, voice).then(function (ok) {
-    if (!ok) setStatus(S, 'تعذّر النطق');
-    else setStatus(S, 'تمت الترجمة والنطق ✓');
-  });
+  var session = startSpeechSession(S);
+  session.push(text);
+  session.finish();
 }
 
 buildPanel('A', 'الطرف أ', 'ar');
 buildPanel('B', 'الطرف ب', 'en');
+
+/* ===== صوت نظام الهاتف للعربية (1.3) =====
+   كتالوج Piper فيه صوت عربي واحد فقط (kareem، ذكر) — فالباب الوحيد لصوت
+   عربي آخر هو محرك نطق الهاتف نفسه عبر الجسر. الخيار «نظام الهاتف» يُضاف
+   إلى قائمة أصوات أي طرف لغته العربية فقط إن أكّد الجسر وجود صوت عربي
+   فعلي على هذا الجهاز؛ إن غاب لا يظهر الخيار أصلًا — لا خيارات وهمية.
+   الجسر ينطق هذا الاختيار عبر Android TextToSpeech بنفس منزلق السرعة. */
+var SYS_AR_VOICE = { id: 'ar-system', label: 'نظام الهاتف' };
+function refreshSystemArVoice() {
+  try {
+    if (!window.VoiceBridge || !VoiceBridge.arabicSystemVoiceAvailable()) return;
+    if (VOICES.ar.some(function (v) { return v.id === 'ar-system'; })) return;
+    VOICES.ar.push(SYS_AR_VOICE);
+    Object.keys(sides).forEach(function (k) {
+      var S = sides[k];
+      if (S.lang === 'ar') {
+        var cur = S.el.voice.value;
+        fillVoices(S);
+        if (cur) S.el.voice.value = cur; // الحفاظ على اختيار المستخدم الحالي
+      }
+    });
+  } catch (e) {}
+}
+window.__sysTtsReady = function () { refreshSystemArVoice(); };
+refreshSystemArVoice();
+setTimeout(refreshSystemArVoice, 1500);
+setTimeout(refreshSystemArVoice, 4000);
 </script>
 </body>
 </html>

@@ -85,9 +85,16 @@ self.onmessage = function (e) {
       var units = splitSentences(d.text);
       var out = [];
       var chain = Promise.resolve();
-      units.forEach(function (u) {
+      units.forEach(function (u, idx) {
         chain = chain.then(function () {
-          return translateUnit(pipe, u, d.srcLang, d.tgtLang).then(function (r) { out.push(r); });
+          return translateUnit(pipe, u, d.srcLang, d.tgtLang).then(function (r) {
+            out.push(r);
+            // بثّ تدريجي (1.3): تُبثّ كل وحدة فور اكتمالها — بعد مرورها بحارس
+            // الاكتمال داخل translateUnit — لتعرضها الصفحة وتنطقها دون انتظار
+            // بقية الجمل. الترتيب محفوظ حتمًا بتسلسل السلسلة، والنتيجة النهائية
+            // الكاملة (mt-done) تبقى هي الموثّقة كما في 1.1.
+            self.postMessage({ type: 'mt-partial', id: d.id, index: idx, total: units.length, text: r });
+          });
         });
       });
       return chain.then(function () {

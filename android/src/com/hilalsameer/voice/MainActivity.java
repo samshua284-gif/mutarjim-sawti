@@ -21,6 +21,9 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.Toast;
+import android.speech.tts.TextToSpeech;
+import android.speech.tts.UtteranceProgressListener;
+import android.speech.tts.Voice;
 import com.k2fsa.sherpa.onnx.GeneratedAudio;
 import com.k2fsa.sherpa.onnx.OfflineTts;
 import com.k2fsa.sherpa.onnx.OfflineTtsConfig;
@@ -30,11 +33,13 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.util.HashMap;
+import java.util.Locale;
 import java.util.Map;
 import org.json.JSONObject;
 
 public class MainActivity extends Activity {
   private WebView w;
+  private VoiceBridge bridge;
   private PermissionRequest pendingReq;
   private static final int MIC_REQ = 2001;
   private static final String HOST = "app.voice";
@@ -67,7 +72,8 @@ public class MainActivity extends Activity {
     st.setAllowUniversalAccessFromFileURLs(true);
     st.setAllowContentAccess(true);
     st.setMediaPlaybackRequiresUserGesture(false);
-    w.addJavascriptInterface(new VoiceBridge(), "VoiceBridge");
+    bridge = new VoiceBridge();
+    w.addJavascriptInterface(bridge, "VoiceBridge");
     w.setWebViewClient(new WebViewClient() {
       @Override public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
         Uri url = request.getUrl();
@@ -124,6 +130,9 @@ public class MainActivity extends Activity {
     new Thread(() -> {
       try { VoiceBridge.extractEspeak(MainActivity.this); } catch (Throwable ignored) {}
     }).start();
+    // تهيئة صوت نظام الهاتف (مسار نطق ثانٍ للعربية فقط، 1.3): يفحص الجسر توفر
+    // صوت عربي فعلي على الجهاز ويُعلم الصفحة عند الجاهزية.
+    bridge.ensureSysTts();
   }
 
   @Override public void onRequestPermissionsResult(int req, String[] perms, int[] results) {
@@ -148,6 +157,11 @@ public class MainActivity extends Activity {
     if (w != null && w.canGoBack()) w.goBack(); else super.onBackPressed();
   }
 
+  @Override protected void onDestroy() {
+    if (bridge != null) bridge.shutdownSysTts();
+    super.onDestroy();
+  }
+
   /* ================= جسر النطق والنسخ ================= */
   public class VoiceBridge {
     private volatile boolean stopFlag = false;
@@ -155,6 +169,12 @@ public class MainActivity extends Activity {
     private OfflineTts tts;
     private String ttsVoice;
     private final Object lock = new Object();
+    // مسار صوت نظام الهاتف (1.3): Android TextToSpeech للعربية فقط — الباب
+    // الوحيد لصوت عربي غير kareem دون اتصال (في كتالوج Piper صوت عربي واحد).
+    private TextToSpeech sysTts;
+    private volatile int sysArState = -1; // ‎-1 لم يُعرف بعد، 0 لا يوجد، 1 يوجد صوت عربي فعلي
+    private volatile Voice sysArVoice;
+    private volatile int sysPendingCb = -1;
 
     @JavascriptInterface public void copyText(final String text) {
       runOnUiThread(() -> {
@@ -172,10 +192,17 @@ public class MainActivity extends Activity {
       if (t != null) {
         try { t.pause(); t.flush(); } catch (Exception ignored) {}
       }
+      // إيقاف مسار نظام الهاتف أيضًا وإكمال ندائه المعلّق كإيقاف
+      if (sysTts != null) { try { sysTts.stop(); } catch (Throwable ignored) {} }
+      final int scb = sysPendingCb;
+      sysPendingCb = -1;
+      if (scb >= 0) runOnUiThread(() -> evalTtsCallback(scb, false, "stopped"));
     }
 
     // يعمل على خيط الجسر — الحظر مقبول: التوليد والتشغيل ثم ردّ النداء للصفحة
     @JavascriptInterface public void speak(final String text, final String voice, final float speed, final int cbId) {
+      // مسار صوت نظام الهاتف (1.3): اختيار ar-system يُروَّت لمحرك الهاتف لا sherpa
+      if ("ar-system".equals(voice)) { speakSystem(text, speed, cbId); return; }
       boolean ok = false;
       String err = "";
       synchronized (lock) {
@@ -199,6 +226,124 @@ public class MainActivity extends Activity {
       final boolean fok = ok;
       final String ferr = err;
       runOnUiThread(() -> evalTtsCallback(cbId, fok, ferr));
+    }
+
+    /* ===== مسار صوت نظام الهاتف (1.3) — TextToSpeech للعربية فقط =====
+       يُهيَّأ من onCreate على الخيط الرئيسي. شرط الظهور في الواجهة: صوت عربي
+       فعلي على الجهاز لا يحتاج شبكة (التطبيق بلا إذن إنترنت أصلًا)؛ عند غيابه
+       يبقى sysArState=0 ولا يعرض الجسر الخيار للصفحة أبدًا. */
+
+    void ensureSysTts() {
+      if (sysTts != null) return;
+      try {
+        sysTts = new TextToSpeech(MainActivity.this, new TextToSpeech.OnInitListener() {
+          @Override public void onInit(int status) {
+            if (status == TextToSpeech.SUCCESS) {
+              try {
+                sysTts.setOnUtteranceProgressListener(new UtteranceProgressListener() {
+                  @Override public void onStart(String uid) {}
+                  @Override public void onDone(String uid) { finishSysUtterance(uid, true, ""); }
+                  @Override public void onError(String uid) { finishSysUtterance(uid, false, "system tts error"); }
+                });
+                Voice v = findArabicVoice(sysTts);
+                sysArVoice = v;
+                boolean has = v != null;
+                if (!has) {
+                  try { has = sysTts.isLanguageAvailable(new Locale("ar")) >= TextToSpeech.LANG_AVAILABLE; }
+                  catch (Throwable ignored) {}
+                }
+                sysArState = has ? 1 : 0;
+                Log.i(TAG, "system tts ready arabic=" + has + " voice=" + (v != null ? v.getName() : "none"));
+              } catch (Throwable e) {
+                sysArState = 0;
+                Log.e(TAG, "system tts scan failed", e);
+              }
+            } else {
+              sysArState = 0;
+              Log.e(TAG, "system tts init failed status=" + status);
+            }
+            runOnUiThread(() -> {
+              try { w.evaluateJavascript("window.__sysTtsReady && window.__sysTtsReady()", null); }
+              catch (Throwable ignored) {}
+            });
+          }
+        });
+      } catch (Throwable e) {
+        sysArState = 0;
+        Log.e(TAG, "system tts create failed", e);
+      }
+    }
+
+    private static Voice findArabicVoice(TextToSpeech t) {
+      try {
+        java.util.Set<Voice> voices = t.getVoices();
+        if (voices != null) {
+          for (Voice v : voices) {
+            try {
+              if (v != null && v.getLocale() != null
+                  && "ar".equals(v.getLocale().getLanguage())
+                  && !v.isNetworkConnectionRequired()) return v;
+            } catch (Throwable ignored) {}
+          }
+        }
+      } catch (Throwable ignored) {}
+      return null;
+    }
+
+    // للصفحة: هل يوجد صوت عربي فعلي في نظام الهاتف؟ (لا يُعرض ar-system إلا عند true)
+    @JavascriptInterface public boolean arabicSystemVoiceAvailable() {
+      return sysArState == 1;
+    }
+
+    // نطق عبر نظام الهاتف: سرعة المنزلق نفسها إلى setSpeechRate، والإكمال غير
+    // متزامن عبر مستمع النطق — يُردّ النداء للصفحة عند انتهاء الجملة فعلًا،
+    // فيعمل طابور النطق المتدفق (1.3) على هذا المسار كما على sherpa.
+    private void speakSystem(final String text, final float speed, final int cbId) {
+      runOnUiThread(() -> {
+        try {
+          if (sysTts == null || sysArState != 1) { evalTtsCallback(cbId, false, "system voice unavailable"); return; }
+          stopFlag = false;
+          if (sysArVoice != null) {
+            sysTts.setVoice(sysArVoice);
+          } else {
+            int r = sysTts.setLanguage(new Locale("ar"));
+            if (r == TextToSpeech.LANG_MISSING_DATA || r == TextToSpeech.LANG_NOT_SUPPORTED) {
+              evalTtsCallback(cbId, false, "arabic system data missing");
+              return;
+            }
+          }
+          sysTts.setSpeechRate(speed);
+          sysPendingCb = cbId;
+          String uid = String.valueOf(cbId);
+          Bundle params = new Bundle();
+          params.putString(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, uid);
+          int rc = sysTts.speak(text, TextToSpeech.QUEUE_FLUSH, params, uid);
+          if (rc != TextToSpeech.SUCCESS) {
+            sysPendingCb = -1;
+            evalTtsCallback(cbId, false, "system speak failed");
+          }
+        } catch (Throwable e) {
+          sysPendingCb = -1;
+          Log.e(TAG, "system speak failed", e);
+          evalTtsCallback(cbId, false, String.valueOf(e));
+        }
+      });
+    }
+
+    private void finishSysUtterance(String uid, boolean ok, String err) {
+      int cb;
+      try { cb = Integer.parseInt(uid); } catch (Throwable e) { return; }
+      if (sysPendingCb != cb) return; // نداء قديم أو أُكمل بالإيقاف — تجاهل
+      sysPendingCb = -1;
+      final int fcb = cb;
+      runOnUiThread(() -> evalTtsCallback(fcb, ok, err));
+    }
+
+    void shutdownSysTts() {
+      if (sysTts != null) {
+        try { sysTts.stop(); sysTts.shutdown(); } catch (Throwable ignored) {}
+        sysTts = null;
+      }
     }
 
     private void playSamples(float[] samples, int sr) throws Exception {
