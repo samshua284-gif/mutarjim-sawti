@@ -138,10 +138,22 @@ var VOICES = {
 var PHRASES = [
   { id: 'greeting', chip: '👋 تحية', ar: 'السلام عليكم، كيف حالك؟', en: 'Hello, how are you?', hi: 'नमस्ते, आप कैसे हैं?', ur: 'السلام علیکم، آپ کیسے ہیں؟' },
   { id: 'thanks', chip: '🙏 شكرًا', ar: 'شكرًا جزيلًا', en: 'Thank you very much', hi: 'बहुत धन्यवाद', ur: 'بہت شکریہ' },
-  { id: 'price', chip: '💰 كم السعر؟', ar: 'كم سعر هذا؟', en: 'How much does this cost?', hi: 'इसकी कीमत कितनी है?', ur: 'اس کی قیمت کتنی ہے؟' },
-  { id: 'hospital', chip: '🏥 أقرب مستشفى', ar: 'من فضلك خذني إلى أقرب مستشفى.', en: 'Please take me to the nearest hospital.', hi: 'कृपया मुझे निकटतम अस्पताल ले चलें।', ur: 'براہ کرم مجھے قریبی اسپتال لے چلیں۔' },
-  { id: 'bathroom', chip: '🚻 أين الحمام؟', ar: 'أين الحمام؟', en: 'Where is the bathroom?', hi: 'शौचालय कहाँ है?', ur: 'باتھ روم کہاں ہے؟' }
+  { id: 'price', chip: '💰 كم السعر؟', ar: 'كم سعر هذا؟', en: 'How much does this cost?', hi: 'इसकी कीमत कितनी है?', ur: 'اس کی قیمت کتنی ہے؟' }
 ];
+// عبارات تعريف وأصول شائعة (1.2): ليست أزرارًا في الواجهة — تدخل قاموس المطابقة
+// فقط شبكةَ أمانٍ لأخطاء السمع في الأسماء والأصول (قال «أنا من سلطنة عُمان»
+// فسمعها Whisper «أنا من سلطانة أمان» فتُرجمت إلى هراء). الاقتراح يبقى بصريًا
+// بزرَّي قبول/تجاهل ولا تصحيح صامت أبدًا، والتطابق التام يأخذ الصيغة الثابتة.
+var ORIGINS = [
+  { id: 'oman-full', ar: 'أنا من سلطنة عُمان', en: 'I am from the Sultanate of Oman', hi: 'मैं सल्तनत ओमान से हूँ', ur: 'میں سلطنت عمان سے ہوں' },
+  { id: 'oman', ar: 'أنا من عُمان', en: 'I am from Oman', hi: 'मैं ओमान से हूँ', ur: 'میں عمان سے ہوں' },
+  { id: 'adam', ar: 'أنا من أدم', en: 'I am from Adam', hi: 'मैं आदम से हूँ', ur: 'میں آدم سے ہوں' },
+  { id: 'nizwa', ar: 'أنا من نزوى', en: 'I am from Nizwa', hi: 'मैं निज़वा से हूँ', ur: 'میں نزویٰ سے ہوں' },
+  { id: 'muscat', ar: 'أنا من مسقط', en: 'I am from Muscat', hi: 'मैं मस्कट से हूँ', ur: 'میں مسقط سے ہوں' },
+  { id: 'salalah', ar: 'أنا من صلالة', en: 'I am from Salalah', hi: 'मैं सलालाह से हूँ', ur: 'میں صلالہ سے ہوں' }
+];
+// قاموس المطابقة الكامل: عبارات الأزرار + عبارات الأصول (للاقتراح والتطابق التام فقط)
+var MATCHBOOK = PHRASES.concat(ORIGINS);
 
 /* ================= أدوات نصية: تطبيع ومطابقة ضبابية آمنة ================= */
 function normalizeText(s) {
@@ -174,7 +186,7 @@ function similarity(a, b) {
 }
 function matchPhrase(text, lang) {
   var best = null, bestScore = 0;
-  PHRASES.forEach(function (p) {
+  MATCHBOOK.forEach(function (p) {
     var s = similarity(text, p[lang]);
     if (s > bestScore) { bestScore = s; best = p; }
   });
@@ -185,8 +197,8 @@ function matchPhrase(text, lang) {
 function exactPhrase(text, lang) {
   var n = normalizeText(text);
   if (!n) return null;
-  for (var i = 0; i < PHRASES.length; i++) {
-    if (normalizeText(PHRASES[i][lang]) === n) return PHRASES[i];
+  for (var i = 0; i < MATCHBOOK.length; i++) {
+    if (normalizeText(MATCHBOOK[i][lang]) === n) return MATCHBOOK[i];
   }
   return null;
 }
@@ -420,7 +432,7 @@ function buildPanel(key, title, defaultLang) {
   });
 
   S.el.speak.addEventListener('click', function () { toggleSpeak(S); });
-  S.el.translate.addEventListener('click', function () { runTranslation(S, true); });
+  S.el.translate.addEventListener('click', function () { hideSuggest(S); runTranslation(S, true); });
   S.el.copyHeard.addEventListener('click', function () { copyNative(S.el.heard.value.trim(), S.el.copyHeard); });
   S.el.copyTr.addEventListener('click', function () { copyNative(S.lastTranslation, S.el.copyTr); });
   S.el.speakTr.addEventListener('click', function () {
@@ -432,7 +444,10 @@ function buildPanel(key, title, defaultLang) {
     hideSuggest(S);
     if (p) { S.el.heard.value = p[S.lang]; runTranslation(S, true); }
   });
-  S.el.suggestNo.addEventListener('click', function () { hideSuggest(S); });
+  S.el.suggestNo.addEventListener('click', function () {
+    hideSuggest(S);
+    runTranslation(S, true); // تجاهل التصحيح: تُرجم النص كما سُمع أصلًا
+  });
   return S;
 }
 function fillVoices(S) {
@@ -477,14 +492,21 @@ function finishRecording(S, auto) {
     S.busy = false;
     if (!text) { setStatus(S, 'لم أميّز كلامًا واضحًا — قرّب الهاتف وجرّب بجملة قصيرة'); return; }
     S.el.heard.value = text;
-    // مطابقة ضبابية آمنة: اقتراح فقط، لا تصحيح صامت أبدًا
+    // مطابقة ضبابية آمنة: اقتراح فقط، لا تصحيح صامت أبدًا.
+    // ترتيب التدفق (1.2): إن وُجد اقتراح تصحيح معلّق لا تبدأ الترجمة التلقائية
+    // حتى يحسمه المستخدم (قبول = ترجمة المصحَّح، تجاهل = ترجمة النص كما سُمع) —
+    // حتى لا تعبر أخطاء الأسماء والأصول إلى الترجمة كما هي. بلا اقتراح:
+    // التدفق التلقائي كما كان.
     var m = matchPhrase(text, S.lang);
     if (m.phrase && m.score >= 0.8 && normalizeText(text) !== normalizeText(m.phrase[S.lang])) {
       S._suggested = m.phrase;
       S.el.suggestTxt.textContent = 'هل قصدت: «' + m.phrase[S.lang] + '»؟';
       S.el.suggest.hidden = false;
-    } else hideSuggest(S);
-    runTranslation(S, true);
+      setStatus(S, '❓ راجع التصحيح المقترح — الترجمة بانتظار قبولك أو تجاهلك');
+    } else {
+      hideSuggest(S);
+      runTranslation(S, true);
+    }
   }).catch(function () {
     S.busy = false;
     setStatus(S, 'تعذّر السمع — أعد المحاولة');
