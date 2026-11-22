@@ -1,13 +1,16 @@
 #!/bin/bash
-# بناء APK «المترجم الصوتي» 1.7 — دون اتصال بالكامل:
+# بناء APK «المترجم الصوتي» 1.8 — دون اتصال بالكامل:
 # سمع أصلي عبر sherpa-onnx بسلسلة سقوط 1.4/1.5: Whisper-small أصليًا
 # ثم عامل ويب Transformers.js عند فشل الأصلي (أُزيلت أذن 1.6 التجريبية
 # كليًا في 1.7 — ملفات وجسرًا — بحكم Hilal التجريبي على هاتفه)
-# + ترجمة NLLB (Transformers.js داخل WebView) + نطق Piper أصلي عبر sherpa-onnx.
+# + ترجمة NLLB (Transformers.js داخل WebView) + نطق Piper أصلي عبر sherpa-onnx
+# + (1.8) مرحلة ثانية: بلوتوث كلاسيك (RFCOMM) بين هاتفين — الترجمة تُحسب
+# على هاتف المرسل، ويعبر البلوتوث النصان ومقطع صوت المتكلم الأصلي فقط.
+# لا إذن إنترنت في أي إصدار — البلوتوث ليس إنترنت.
 # درس إلزامي من ناسخ الكلمات: MainActivity.java يُعاد كتابته هنا داخل السكربت (heredoc) — أي تعديل عليه يكون هنا.
 set -e
 exec > >(tee -a "$HOME/workspace/voice-translator/android/build.log") 2>&1
-echo "=== VOICE TRANSLATOR BUILD (APK 1.7) START $(date) ==="
+echo "=== VOICE TRANSLATOR BUILD (APK 1.8) START $(date) ==="
 
 PROJ="$HOME/workspace/voice-translator/android"
 APP="$HOME/workspace/voice-translator/app"
@@ -20,7 +23,7 @@ AJAR="$SDK/platforms/android-34/android.jar"
 BT="$SDK/build-tools/34.0.0"
 SHERPA_JAR="$HOME/workspace/voice-translator/sherpa-aar/extracted-1.12.40/classes.jar"
 KOTLIN_JAR="$SDK/cmdline-tools/latest/lib/external/org/jetbrains/kotlin/kotlin-stdlib/1.9.0/kotlin-stdlib-1.9.0.jar"
-OUT="$HOME/workspace/voice-translator/voice-translator-1.7.apk"
+OUT="$HOME/workspace/voice-translator/voice-translator-1.8.apk"
 
 cd "$PROJ"
 mkdir -p assets/www/engines/models gen classes dex src/com/hilalsameer/voice res/values stage
@@ -69,10 +72,17 @@ cat > AndroidManifest.xml <<'EOF'
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.hilalsameer.voice"
-    android:versionCode="8" android:versionName="1.7">
+    android:versionCode="9" android:versionName="1.8">
   <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="34"/>
   <uses-permission android:name="android.permission.RECORD_AUDIO"/>
   <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS"/>
+  <!-- بلوتوث المرحلة الثانية (1.8): كلاسيك RFCOMM بين هاتفين، بلا إنترنت -->
+  <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30"/>
+  <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30"/>
+  <uses-permission android:name="android.permission.BLUETOOTH_CONNECT"/>
+  <uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation"/>
+  <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="30"/>
+  <uses-feature android:name="android.hardware.bluetooth" android:required="false"/>
   <application android:label="@string/app_name" android:icon="@mipmap/ic_launcher"
       android:theme="@android:style/Theme.Material.NoActionBar" android:allowBackup="false"
       android:extractNativeLibs="true">
@@ -122,8 +132,17 @@ package com.hilalsameer.voice;
 
 import android.Manifest;
 import android.app.Activity;
+import android.bluetooth.BluetoothAdapter;
+import android.bluetooth.BluetoothDevice;
+import android.bluetooth.BluetoothManager;
+import android.bluetooth.BluetoothServerSocket;
+import android.bluetooth.BluetoothSocket;
+import android.content.BroadcastReceiver;
 import android.content.ClipData;
 import android.content.ClipboardManager;
+import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.media.AudioAttributes;
 import android.media.AudioFormat;
@@ -156,12 +175,20 @@ import com.k2fsa.sherpa.onnx.OfflineWhisperModelConfig;
 import com.k2fsa.sherpa.onnx.OfflineTtsConfig;
 import com.k2fsa.sherpa.onnx.OfflineTtsModelConfig;
 import com.k2fsa.sherpa.onnx.OfflineTtsVitsModelConfig;
+import java.io.EOFException;
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 public class MainActivity extends Activity {
@@ -278,6 +305,11 @@ public class MainActivity extends Activity {
       }
       pendingReq = null;
     }
+    if (req == VoiceBridge.BT_REQ && bridge != null) {
+      boolean all = results.length > 0;
+      for (int r : results) if (r != PackageManager.PERMISSION_GRANTED) all = false;
+      bridge.onBtPermsResult(all && bridge.btPermsOk());
+    }
   }
 
   void evalTtsCallback(int id, boolean ok, String err) {
@@ -307,7 +339,7 @@ public class MainActivity extends Activity {
   }
 
   @Override protected void onDestroy() {
-    if (bridge != null) bridge.shutdownSysTts();
+    if (bridge != null) { bridge.shutdownBt(); bridge.shutdownSysTts(); }
     super.onDestroy();
   }
 
@@ -336,6 +368,23 @@ public class MainActivity extends Activity {
     private final Object asrLock = new Object();
     private volatile int asrState = 0; // small: 0 لم يُبنَ بعد، 1 جاهز، ‎-1 فشل نهائي
     private volatile String asrLastKind = ""; // الأذن التي خدمت آخر طلب فعلًا: small
+    // بلوتوث المرحلة الثانية (1.8): RFCOMM كلاسيك بين هاتفين — خادم يستمع
+    // وعميل يتصل، واتصال واحد قائم في أي وقت. الحالة تُبثّ للصفحة عبر
+    // __btEvent، وكل فشل يظهر نصًا في واجهة الصفحة لا يُبتلع صامتًا.
+    static final int BT_REQ = 2002;
+    private static final int BT_DISC_REQ = 2003;
+    private static final UUID BT_UUID = UUID.fromString("e8d5f1a0-7c3b-4a2e-9f6d-1b0c8a7e5d42");
+    private static final String BT_SVC_NAME = "VoiceTranslator";
+    private volatile String btState = "off"; // off|listening|connecting|connected|disconnected
+    private volatile String btPeer = "";
+    private volatile boolean btServerOn = false;
+    private volatile boolean btIsServerConn = false;
+    private BluetoothServerSocket btServer;
+    private BluetoothSocket btSocket;
+    private OutputStream btOut;
+    private final Object btWriteLock = new Object();
+    private BroadcastReceiver btDiscoveryReceiver;
+    private final ExecutorService btSendExec = Executors.newSingleThreadExecutor();
 
     @JavascriptInterface public void copyText(final String text) {
       runOnUiThread(() -> {
@@ -505,6 +554,372 @@ public class MainActivity extends Activity {
         try { sysTts.stop(); sysTts.shutdown(); } catch (Throwable ignored) {}
         sysTts = null;
       }
+    }
+
+    /* ===== بلوتوث المرحلة الثانية (1.8) — هاتفان عبر RFCOMM =====
+       التصميم المعتمد (SPEC بند 6): الترجمة تُحسب على هاتف المرسل بسلسلته
+       القائمة، وما يعبر البلوتوث حزمة واحدة مؤطّرة (4 بايت طول بادئ كبير
+       الطرف + JSON UTF-8): النص الأصلي المسموع + النص المترجم + اللغتان +
+       مقطع صوت المتكلم الأصلي اختياريًا (PCM16 خام 16kHz بـBase64 — تسجيل
+       الصفحة نفسه). المستقبِل يعرض النصين وينطق الترجمة بصوته وإعداداته هو
+       عبر مسارَي النطق القائمين، وزر يعيد تشغيل صوت المرسل الحقيقي كما هو
+       (playAudioClip أدناه). الحزم الكبيرة تُقرأ كاملة قبل التسليم — لا
+       تسليم جزئي أبدًا (BtFrame يقرأ الإطار كاملًا أو يرمي). */
+
+    // بثّ حدث بلوتوث إلى الصفحة (حالة/خطأ/جهاز مكتشف/عبارة واردة/أذونات)
+    private void btEmit(JSONObject ev) {
+      final String s = ev.toString();
+      runOnUiThread(() -> {
+        try { w.evaluateJavascript("window.__btEvent && window.__btEvent(" + JSONObject.quote(s) + ")", null); }
+        catch (Throwable ignored) {}
+      });
+    }
+
+    private void btStatus(String state, String peer) {
+      btState = state;
+      btPeer = peer == null ? "" : peer;
+      try {
+        JSONObject ev = new JSONObject();
+        ev.put("kind", "status");
+        ev.put("state", state);
+        ev.put("peer", btPeer);
+        ev.put("listening", btServerOn);
+        btEmit(ev);
+      } catch (Throwable ignored) {}
+      Log.i(TAG, "bt status=" + state + " peer=" + btPeer + " listening=" + btServerOn);
+    }
+
+    private void btError(String msg) {
+      Log.w(TAG, "bt error: " + msg);
+      try {
+        JSONObject ev = new JSONObject();
+        ev.put("kind", "error");
+        ev.put("message", msg);
+        btEmit(ev);
+      } catch (Throwable ignored) {}
+    }
+
+    private BluetoothAdapter btAdapter() {
+      try {
+        BluetoothManager bm = (BluetoothManager) getSystemService(Context.BLUETOOTH_SERVICE);
+        if (bm != null && bm.getAdapter() != null) return bm.getAdapter();
+      } catch (Throwable ignored) {}
+      try { return BluetoothAdapter.getDefaultAdapter(); } catch (Throwable e) { return null; }
+    }
+
+    // الأذونات الناقصة بحسب جيل النظام: 12+ ‏CONNECT/SCAN، وما قبله موقع
+    // دقيق (شرط اكتشاف الأجهزة في الأجيال القديمة). تُطلب وقت الاستعمال فقط.
+    private String[] btMissingPerms() {
+      ArrayList<String> need = new ArrayList<>();
+      try {
+        if (android.os.Build.VERSION.SDK_INT >= 31) {
+          if (checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED)
+            need.add(Manifest.permission.BLUETOOTH_CONNECT);
+          if (checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED)
+            need.add(Manifest.permission.BLUETOOTH_SCAN);
+        } else {
+          if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED)
+            need.add(Manifest.permission.ACCESS_FINE_LOCATION);
+        }
+      } catch (Throwable ignored) {}
+      return need.toArray(new String[0]);
+    }
+
+    @JavascriptInterface public boolean btPermsOk() { return btMissingPerms().length == 0; }
+
+    @JavascriptInterface public void btRequestPerms() {
+      final String[] need = btMissingPerms();
+      if (need.length == 0) { onBtPermsResult(true); return; }
+      runOnUiThread(() -> {
+        try { requestPermissions(need, BT_REQ); }
+        catch (Throwable e) { onBtPermsResult(false); }
+      });
+    }
+
+    void onBtPermsResult(boolean granted) {
+      try {
+        JSONObject ev = new JSONObject();
+        ev.put("kind", "perms");
+        ev.put("granted", granted);
+        btEmit(ev);
+      } catch (Throwable ignored) {}
+    }
+
+    // فحوص مشتركة قبل أي عملية: محوّل موجود ومفعّل والأذونات حاضرة —
+    // كل غياب يظهر رسالة واضحة في الواجهة، لا انهيار ولا صمت.
+    private BluetoothAdapter btReady() {
+      BluetoothAdapter ad = btAdapter();
+      if (ad == null) { btError("هذا الجهاز بلا بلوتوث"); return null; }
+      if (!ad.isEnabled()) { btError("البلوتوث غير مفعّل — فعّله من إعدادات الهاتف ثم أعد المحاولة"); return null; }
+      if (!btPermsOk()) { btError("إذن البلوتوث مفقود — امنحه من إعدادات التطبيق"); return null; }
+      return ad;
+    }
+
+    // جعل الهاتف قابلًا للاكتشاف مؤقتًا عند بدء الاستقبال (حوار نظامي
+    // يوافق عليه المستخدم) كي يجده هاتف الطرف الآخر في أول اقتران.
+    private void btEnsureDiscoverable(BluetoothAdapter ad) {
+      try {
+        if (ad.getScanMode() != BluetoothAdapter.SCAN_MODE_CONNECTABLE_DISCOVERABLE) {
+          Intent i = new Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE);
+          i.putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, 300);
+          startActivityForResult(i, BT_DISC_REQ);
+        }
+      } catch (Throwable ignored) {}
+    }
+
+    /* ----- الخادم: يستمع ويقبل اتصالًا واحدًا، ويعود للاستماع بعد انقطاعه ----- */
+    @JavascriptInterface public void btStartServer() {
+      new Thread(() -> {
+        BluetoothAdapter ad = btReady();
+        if (ad == null) return;
+        if (btServerOn) { btStatus("listening", ""); return; }
+        try {
+          btServer = ad.listenUsingRfcommWithServiceRecord(BT_SVC_NAME, BT_UUID);
+        } catch (Throwable e) {
+          btError("تعذّر بدء الاستقبال: " + e.getMessage());
+          return;
+        }
+        btServerOn = true;
+        btEnsureDiscoverable(ad);
+        btStatus("listening", "");
+        while (btServerOn) {
+          BluetoothSocket s;
+          try { s = btServer.accept(); }
+          catch (Throwable e) {
+            if (btServerOn) btError("توقّف الاستقبال: " + e.getMessage());
+            break;
+          }
+          if (s != null) handleBtConnected(s, true);
+        }
+      }).start();
+    }
+
+    /* ----- العميل: اتصال بجهاز مختار بعنوانه ----- */
+    @JavascriptInterface public void btConnect(final String address) {
+      new Thread(() -> {
+        BluetoothAdapter ad = btReady();
+        if (ad == null) return;
+        btStatus("connecting", address);
+        BluetoothSocket s = null;
+        try {
+          try { ad.cancelDiscovery(); } catch (Throwable ignored) {}
+          BluetoothDevice dev = ad.getRemoteDevice(address);
+          s = dev.createRfcommSocketToServiceRecord(BT_UUID);
+          s.connect();
+        } catch (Throwable e) {
+          if (s != null) { try { s.close(); } catch (Throwable ignored) {} }
+          btError("تعذّر الاتصال بالهاتف الآخر — تأكد أنه يستمع في التطبيق نفسه: " + e.getMessage());
+          btStatus(btServerOn ? "listening" : "off", "");
+          return;
+        }
+        handleBtConnected(s, false);
+      }).start();
+    }
+
+    // تثبيت اتصال قائم وبدء خيط قراءته. اتصال ثانٍ وارد أثناء قيام واحد
+    // يُغلق فورًا — اتصال واحد في أي وقت كما صُمم.
+    private void handleBtConnected(BluetoothSocket s, boolean serverSide) {
+      final InputStream in;
+      synchronized (btWriteLock) {
+        if (btSocket != null) {
+          try { s.close(); } catch (Throwable ignored) {}
+          return;
+        }
+        try {
+          btOut = s.getOutputStream();
+          in = s.getInputStream();
+          btSocket = s;
+          btIsServerConn = serverSide;
+        } catch (Throwable e) {
+          try { s.close(); } catch (Throwable ignored) {}
+          btError("تعذّر فتح قناة الاتصال: " + e.getMessage());
+          return;
+        }
+      }
+      String peer = "";
+      try {
+        BluetoothDevice d = s.getRemoteDevice();
+        String nm = null;
+        try { nm = d.getName(); } catch (Throwable ignored) {}
+        peer = (nm != null && !nm.isEmpty()) ? nm : d.getAddress();
+      } catch (Throwable ignored) {}
+      btStatus("connected", peer);
+      new Thread(() -> {
+        try {
+          byte[] frame;
+          while ((frame = BtFrame.readFrame(in)) != null) deliverBtFrame(frame);
+        } catch (Throwable e) {
+          Log.i(TAG, "bt read ended: " + e);
+        }
+        btConnectionLost();
+      }).start();
+    }
+
+    // تسليم حزمة واردة كاملة إلى الصفحة بعد التحقق أنها عبارة ببنيتها
+    private void deliverBtFrame(byte[] frame) {
+      try {
+        String text = new String(frame, "UTF-8");
+        JSONObject pkt = new JSONObject(text);
+        if (!"utterance".equals(pkt.optString("type"))) {
+          Log.w(TAG, "bt frame ignored, type=" + pkt.optString("type"));
+          return;
+        }
+        JSONObject ev = new JSONObject();
+        ev.put("kind", "utterance");
+        ev.put("packet", pkt);
+        btEmit(ev);
+        Log.i(TAG, "bt utterance delivered heard=" + pkt.optString("heardText").length()
+            + " tr=" + pkt.optString("translatedText").length()
+            + " audio=" + (pkt.has("audioB64") ? "yes" : "no"));
+      } catch (Throwable e) {
+        btError("وصلت حزمة تالفة عبر البلوتوث وتُجاهلت");
+      }
+    }
+
+    // انقطاع الاتصال القائم: تنظيف الحقول وإعلان الحالة (يعود الخادم
+    // للاستماع تلقائيًا إن كان مفعّلًا — حلقة القبول قائمة أصلًا)
+    private void btConnectionLost() {
+      synchronized (btWriteLock) {
+        if (btSocket != null) { try { btSocket.close(); } catch (Throwable ignored) {} }
+        btSocket = null;
+        btOut = null;
+      }
+      if (!"off".equals(btState)) btStatus("disconnected", "");
+    }
+
+    /* ----- الإرسال: إطار كامل على خيط إرسال مخصص فلا يحظر خيط الجسر ----- */
+    @JavascriptInterface public void btSend(final String json) {
+      btSendExec.execute(() -> {
+        OutputStream out;
+        synchronized (btWriteLock) { out = btOut; }
+        if (out == null) { btError("لا اتصال بلوتوث قائم — اتصل أولًا"); return; }
+        try {
+          byte[] payload = json.getBytes("UTF-8");
+          synchronized (btWriteLock) { BtFrame.writeFrame(out, payload); }
+          Log.i(TAG, "bt sent bytes=" + payload.length);
+        } catch (Throwable e) {
+          btError("فشل الإرسال عبر البلوتوث: " + e.getMessage());
+          btConnectionLost();
+        }
+      });
+    }
+
+    /* ----- قائمة المقترنة والاكتشاف ----- */
+    @JavascriptInterface public String btListPaired() {
+      JSONArray arr = new JSONArray();
+      try {
+        BluetoothAdapter ad = btAdapter();
+        if (ad != null) {
+          for (BluetoothDevice d : ad.getBondedDevices()) {
+            JSONObject o = new JSONObject();
+            String nm = null;
+            try { nm = d.getName(); } catch (Throwable ignored) {}
+            o.put("name", nm == null ? "" : nm);
+            o.put("address", d.getAddress());
+            arr.put(o);
+          }
+        }
+      } catch (Throwable e) {
+        Log.w(TAG, "bt paired list failed", e);
+      }
+      return arr.toString();
+    }
+
+    @JavascriptInterface public void btStartDiscovery() {
+      BluetoothAdapter ad = btReady();
+      if (ad == null) return;
+      try {
+        if (btDiscoveryReceiver == null) {
+          btDiscoveryReceiver = new BroadcastReceiver() {
+            @Override public void onReceive(Context c, Intent intent) {
+              String a = intent.getAction();
+              if (BluetoothDevice.ACTION_FOUND.equals(a)) {
+                try {
+                  BluetoothDevice d = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
+                  if (d == null) return;
+                  String nm = null;
+                  try { nm = d.getName(); } catch (Throwable ignored) {}
+                  JSONObject ev = new JSONObject();
+                  ev.put("kind", "device");
+                  ev.put("name", nm == null ? "" : nm);
+                  ev.put("address", d.getAddress());
+                  btEmit(ev);
+                } catch (Throwable ignored) {}
+              } else if (BluetoothAdapter.ACTION_DISCOVERY_FINISHED.equals(a)) {
+                try {
+                  JSONObject ev = new JSONObject();
+                  ev.put("kind", "discoveryDone");
+                  btEmit(ev);
+                } catch (Throwable ignored) {}
+              }
+            }
+          };
+          IntentFilter f = new IntentFilter();
+          f.addAction(BluetoothDevice.ACTION_FOUND);
+          f.addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED);
+          registerReceiver(btDiscoveryReceiver, f);
+        }
+        if (ad.isDiscovering()) ad.cancelDiscovery();
+        if (ad.startDiscovery()) {
+          JSONObject ev = new JSONObject();
+          ev.put("kind", "discovering");
+          btEmit(ev);
+        } else {
+          btError("تعذّر بدء البحث عن أجهزة");
+        }
+      } catch (Throwable e) {
+        btError("تعذّر البحث عن أجهزة: " + e.getMessage());
+      }
+    }
+
+    /* ----- قطع كل شيء: الاتصال والاستماع والاكتشاف ----- */
+    @JavascriptInterface public void btDisconnect() {
+      btServerOn = false;
+      if (btServer != null) { try { btServer.close(); } catch (Throwable ignored) {} btServer = null; }
+      synchronized (btWriteLock) {
+        if (btSocket != null) { try { btSocket.close(); } catch (Throwable ignored) {} }
+        btSocket = null;
+        btOut = null;
+      }
+      try {
+        BluetoothAdapter ad = btAdapter();
+        if (ad != null && ad.isDiscovering()) ad.cancelDiscovery();
+      } catch (Throwable ignored) {}
+      btStatus("off", "");
+    }
+
+    void shutdownBt() {
+      try { btDisconnect(); } catch (Throwable ignored) {}
+      if (btDiscoveryReceiver != null) {
+        try { unregisterReceiver(btDiscoveryReceiver); } catch (Throwable ignored) {}
+        btDiscoveryReceiver = null;
+      }
+    }
+
+    /* ----- تشغيل مقطع صوت حقيقي وارد (1.8) -----
+       يعيد تشغيل PCM المرسل (16kHz أحادي PCM16 بـBase64 — تسجيل الصفحة
+       نفسه) كما هو عبر playSamples، فيسمع المستقبِل صوت المتكلم الأصلي
+       لا صوتًا مولّدًا. الردّ بآلية نداء النطق نفسها (بلا صوت مولّد). */
+    @JavascriptInterface public void playAudioClip(final String b64, final int cbId) {
+      boolean ok = false;
+      String err = "";
+      try {
+        byte[] pcm = Base64.decode(b64, Base64.DEFAULT);
+        float[] samples = new float[pcm.length / 2];
+        for (int i = 0; i < samples.length; i++) {
+          int v = (pcm[2 * i] & 0xff) | (pcm[2 * i + 1] << 8);
+          samples[i] = ((short) v) / 32768f;
+        }
+        stopFlag = false;
+        playSamples(samples, 16000);
+        ok = true;
+      } catch (Throwable e) {
+        err = String.valueOf(e);
+        Log.e(TAG, "playAudioClip failed", e instanceof Exception ? (Exception) e : new Exception(e));
+      }
+      final boolean fok = ok;
+      final String ferr = err;
+      runOnUiThread(() -> evalTtsCallback(cbId, fok, ferr, null));
     }
 
     /* ===== السمع الأصلي (1.4) — تركيبة 1.7 =====
@@ -831,6 +1246,50 @@ public class MainActivity extends Activity {
       }
       if (!tmp.renameTo(dest)) throw new Exception("rename failed: " + dest);
     }
+  }
+}
+
+/* تأطير حزم البلوتوث (1.8): إطار = 4 بايت طول بادئ (big-endian) + حمولة.
+   صنف نقي بلا أي اعتماد على أندرويد — يُختبر منطقيًا على JVM سطح مكتب
+   (كتابة/قراءة round-trip عبر تيارات ذاكرة). القراءة إما أن تعيد الإطار
+   كاملًا أو ترمي — لا تسليم جزئي أبدًا؛ ونهاية تيار نظيفة عند حدّ إطار
+   تعيد null (انقطاع مهذّب). سقف الحجم يحمي من طول تالف/خبيث. */
+class BtFrame {
+  static final int MAX_FRAME = 64 * 1024 * 1024;
+
+  static void writeFrame(OutputStream out, byte[] payload) throws IOException {
+    int n = payload.length;
+    if (n > MAX_FRAME) throw new IOException("frame too large: " + n);
+    out.write((n >>> 24) & 0xff);
+    out.write((n >>> 16) & 0xff);
+    out.write((n >>> 8) & 0xff);
+    out.write(n & 0xff);
+    out.write(payload);
+    out.flush();
+  }
+
+  static byte[] readFrame(InputStream in) throws IOException {
+    int b0 = in.read();
+    if (b0 < 0) return null; // نهاية نظيفة عند حدّ إطار
+    int b1 = readByteOrThrow(in);
+    int b2 = readByteOrThrow(in);
+    int b3 = readByteOrThrow(in);
+    int n = (b0 << 24) | (b1 << 16) | (b2 << 8) | b3;
+    if (n < 0 || n > MAX_FRAME) throw new IOException("bad frame length: " + n);
+    byte[] buf = new byte[n];
+    int off = 0;
+    while (off < n) {
+      int r = in.read(buf, off, n - off);
+      if (r < 0) throw new EOFException("frame truncated at " + off + "/" + n);
+      off += r;
+    }
+    return buf;
+  }
+
+  private static int readByteOrThrow(InputStream in) throws IOException {
+    int b = in.read();
+    if (b < 0) throw new EOFException("eof inside frame header");
+    return b;
   }
 }
 EOF

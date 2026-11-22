@@ -95,6 +95,44 @@
   }
   .suggest .yes { background: #ffb020; color: #0b1020; font-weight: 700; border: none; }
   .suggest .no { background: transparent; color: #cfd8ff; }
+  /* قسم البلوتوث المشترك (1.8) — يبقى بالعربية كما هو مصمم */
+  .btbar {
+    max-width: 640px; margin: 0 auto 14px;
+    background: rgba(255,255,255,.055); border: 1px solid rgba(120,180,255,.3);
+    border-radius: 20px; padding: 12px 14px; backdrop-filter: blur(10px);
+    box-shadow: 0 10px 30px rgba(0,0,0,.35);
+  }
+  .bt-head { font-size: 15px; font-weight: 800; color: #cfe4ff; }
+  .bt-status { min-height: 20px; font-size: 13px; color: #ffd97a; margin-top: 6px; text-align: center; }
+  .bt-status.ok { color: #8df0b3; }
+  .bt-status.err { color: #ff9d9d; }
+  .bt-row { display: flex; gap: 8px; margin-top: 8px; }
+  .bt-devices { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+  .bt-devices[hidden] { display: none; }
+  .bt-dev {
+    display: flex; gap: 8px; align-items: center;
+    background: rgba(11,16,32,.6); border: 1px solid rgba(255,255,255,.16);
+    border-radius: 10px; padding: 8px 10px; font-size: 13.5px;
+  }
+  .bt-dev .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bt-dev .addr { color: #7787b3; font-size: 11.5px; }
+  .bt-dev button {
+    cursor: pointer; border-radius: 8px; padding: 6px 12px; font-size: 13px;
+    background: #2563eb; color: #fff; border: none; font-weight: 700;
+  }
+  /* بطاقة عبارة واردة عبر البلوتوث داخل مربع الطرف (1.8) */
+  .incoming {
+    margin-top: 10px; background: rgba(30,60,120,.28); border: 1px solid rgba(120,180,255,.5);
+    border-radius: 12px; padding: 10px;
+  }
+  .incoming[hidden] { display: none; }
+  .incoming .inc-head { font-size: 13px; font-weight: 800; color: #a9ccff; margin-bottom: 6px; }
+  .incoming .inc-orig { font-size: 15px; line-height: 1.55; color: #dbe7ff; }
+  .incoming .inc-tr {
+    font-size: 17px; line-height: 1.55; background: rgba(20,40,30,.55);
+    border: 1px solid rgba(80,220,140,.35); border-radius: 10px; padding: 8px;
+  }
+  .incoming .mini { margin-top: 8px; width: 100%; }
   footer { text-align: center; color: #7787b3; font-size: 12px; margin-top: 16px; line-height: 1.7; }
 </style>
 </head>
@@ -113,6 +151,16 @@
     <span class="val" id="speedVal">1.0×</span>
   </div>
 </header>
+<section class="btbar" id="btBar">
+  <div class="bt-head">📶 بلوتوث — محادثة بين هاتفين</div>
+  <div class="bt-status" id="btStatus">غير متصل</div>
+  <div class="bt-row">
+    <button class="mini" id="btListen">📥 استقبال</button>
+    <button class="mini" id="btFind">📲 اتصال بهاتف آخر</button>
+    <button class="mini" id="btOff" hidden>✂️ قطع الاتصال</button>
+  </div>
+  <div class="bt-devices" id="btDevices" hidden></div>
+</section>
 <main id="panels"></main>
 <footer>
   كل شيء يعمل على جهازك دون أي اتصال: السمع بـWhisper، والترجمة بـNLLB، والنطق بأصوات Piper عبر sherpa-onnx.<br>
@@ -195,7 +243,11 @@ var UI = {
     translated: 'تمت الترجمة',
     translatedSpoken: 'تمت الترجمة والنطق ✓',
     speakFailed: 'تعذّر النطق',
-    mtFailed: 'تعذّرت الترجمة — أعد المحاولة'
+    mtFailed: 'تعذّرت الترجمة — أعد المحاولة',
+    sendPeer: '📤 أرسل للطرف الآخر',
+    fromPeer: '📥 من الطرف الآخر (عبر البلوتوث)',
+    origLbl: 'النص الأصلي كما قاله:',
+    realVoice: '🔊 اسمع صوته الحقيقي'
   },
   en: {
     whoA: 'Side A', whoB: 'Side B',
@@ -226,7 +278,11 @@ var UI = {
     translated: 'Translated',
     translatedSpoken: 'Translation and speech done ✓',
     speakFailed: 'Speech failed',
-    mtFailed: 'Translation failed — try again'
+    mtFailed: 'Translation failed — try again',
+    sendPeer: '📤 Send to the other side',
+    fromPeer: '📥 From the other side (via Bluetooth)',
+    origLbl: 'Original, as he said it:',
+    realVoice: '🔊 Hear his real voice'
   },
   hi: {
     whoA: 'पक्ष A', whoB: 'पक्ष B',
@@ -257,7 +313,11 @@ var UI = {
     translated: 'अनुवाद हुआ',
     translatedSpoken: 'अनुवाद और उच्चारण पूर्ण ✓',
     speakFailed: 'उच्चारण विफल',
-    mtFailed: 'अनुवाद विफल — फिर कोशिश करें'
+    mtFailed: 'अनुवाद विफल — फिर कोशिश करें',
+    sendPeer: '📤 दूसरी ओर भेजें',
+    fromPeer: '📥 दूसरी ओर से (ब्लूटूथ द्वारा)',
+    origLbl: 'मूल पाठ, जैसा उसने कहा:',
+    realVoice: '🔊 उसकी असली आवाज़ सुनें'
   },
   ur: {
     whoA: 'طرف A', whoB: 'طرف B',
@@ -288,7 +348,11 @@ var UI = {
     translated: 'ترجمہ ہو گیا',
     translatedSpoken: 'ترجمہ اور تلفظ مکمل ✓',
     speakFailed: 'تلفظ ناکام',
-    mtFailed: 'ترجمہ ناکام — دوبارہ کوشش کریں'
+    mtFailed: 'ترجمہ ناکام — دوبارہ کوشش کریں',
+    sendPeer: '📤 دوسری طرف بھیجیں',
+    fromPeer: '📥 دوسری طرف سے (بلوٹوتھ کے ذریعے)',
+    origLbl: 'اصل متن، جیسا اس نے کہا:',
+    realVoice: '🔊 اس کی اصل آواز سنیں'
   }
 };
 // سلسلة واجهة الطرف S بلغته هو — سقوط آمن إلى العربية ثم إلى المفتاح نفسه
@@ -714,7 +778,9 @@ function buildPanel(key, title, defaultLang) {
     '<label class="lbl tr-lbl">الترجمة بلغة الطرف الآخر:</label>' +
     '<div class="translation" dir="auto"></div>' +
     '<div class="row"><button class="mini copy-tr">📋 نسخ الترجمة</button>' +
-    '<button class="mini speak-tr">🔊 نطق الترجمة</button></div>';
+    '<button class="mini speak-tr">🔊 نطق الترجمة</button></div>' +
+    '<div class="row"><button class="mini send-bt" hidden>📤 أرسل للطرف الآخر</button></div>' +
+    '<div class="incoming" hidden></div>';
   main.appendChild(sec);
 
   var S = {
@@ -731,6 +797,7 @@ function buildPanel(key, title, defaultLang) {
       copyHeard: sec.querySelector('.copy-heard'), translate: sec.querySelector('.translate'),
       translation: sec.querySelector('.translation'),
       copyTr: sec.querySelector('.copy-tr'), speakTr: sec.querySelector('.speak-tr'),
+      sendBt: sec.querySelector('.send-bt'), incoming: sec.querySelector('.incoming'),
       chips: []
     },
     recording: false, busy: false, lastTranslation: ''
@@ -750,6 +817,7 @@ function buildPanel(key, title, defaultLang) {
     var b = document.createElement('button');
     b.className = 'chip'; b.textContent = p.chips[S.lang];
     b.addEventListener('click', function () {
+      S._lastAudio = null; // عبارة جاهزة: لا مقطع صوتي يرافقها عبر البلوتوث (1.8)
       S.el.heard.value = p[S.lang];
       hideSuggest(S);
       runTranslation(S, true);
@@ -758,6 +826,10 @@ function buildPanel(key, title, defaultLang) {
     S.el.chips.push(b);
   });
 
+  S.el.sendBt.addEventListener('click', function () { sendToPeer(S); });
+  // تحرير النص المسموع يدويًا يفصل عنه مقطع التسجيل: المقطع لا يرافق إلا
+  // النص الذي أنتجه التسجيل نفسه كما هو (1.8).
+  S.el.heard.addEventListener('input', function () { S._lastAudio = null; });
   S.el.speak.addEventListener('click', function () { toggleSpeak(S); });
   S.el.translate.addEventListener('click', function () { hideSuggest(S); runTranslation(S, true); });
   S.el.copyHeard.addEventListener('click', function () { copyNative(S.el.heard.value.trim(), S.el.copyHeard, t(S, 'copied')); });
@@ -806,6 +878,7 @@ function applyPanelLang(S) {
   S.el.translate.textContent = t(S, 'translate');
   S.el.copyTr.textContent = t(S, 'copyTr');
   S.el.speakTr.textContent = t(S, 'speakTr');
+  S.el.sendBt.textContent = t(S, 'sendPeer');
   S.el.suggestYes.textContent = t(S, 'yes');
   S.el.suggestNo.textContent = t(S, 'no');
   S.el.chips.forEach(function (b, i) { b.textContent = PHRASES[i].chips[S.lang]; });
@@ -838,6 +911,7 @@ function finishRecording(S, auto) {
   S.el.speak.classList.remove('recording');
   var rec = stopRecording();
   if (!rec || !rec.audio.length) { setStatus(S, t(S, 'noAudio')); return; }
+  S._lastAudio = rec.audio; // مقطع المتكلم الأصلي — يرافق العبارة عبر البلوتوث إن أُرسلت (1.8)
   S.busy = true;
   setStatus(S, t(S, auto ? 'convertingAuto' : 'converting'));
   // السمع عبر نقطة الدخول الواحدة (1.4): أصلي أولًا، سقوط تلقائي لعامل الويب
@@ -887,6 +961,7 @@ function runTranslation(S, speakAfter) {
   var done = function (result) {
     S.lastTranslation = result;
     S.el.translation.textContent = result;
+    refreshSendButtons();
     if (speakAfter) speakFor(S, result);
     else setStatus(S, t(S, 'translated'));
   };
@@ -907,6 +982,7 @@ function runTranslation(S, speakAfter) {
       var shown = parts.filter(function (x) { return typeof x === 'string'; }).join(' ');
       S.lastTranslation = shown;
       S.el.translation.textContent = shown;
+      refreshSendButtons();
       setStatus(S, t(S, speakAfter ? 'progressSpeak' : 'progressPlain')
         .replace('{a}', arrived).replace('{b}', p.total));
       if (session) session.push(p.text);
@@ -914,6 +990,7 @@ function runTranslation(S, speakAfter) {
     .then(function (result) {
       S.lastTranslation = result;
       S.el.translation.textContent = result;
+      refreshSendButtons();
       if (session) session.finish();
       else setStatus(S, t(S, 'translated'));
     })
@@ -958,6 +1035,205 @@ window.__sysTtsReady = function () { refreshSystemArVoice(); };
 refreshSystemArVoice();
 setTimeout(refreshSystemArVoice, 1500);
 setTimeout(refreshSystemArVoice, 4000);
+
+/* ================= بلوتوث المرحلة الثانية (1.8) =================
+   هاتفان بالتطبيق نفسه يقترنان بـBluetooth Classic ‏(RFCOMM) دون إنترنت.
+   الترجمة تُحسب هنا على هاتف المرسل بسلسلته القائمة، وما يعبر البلوتوث
+   حزمة واحدة: النص الأصلي + الترجمة + مقطع صوت المتكلم الأصلي (اختياري —
+   العبارات الجاهزة والكتابة اليدوية بلا مقطع). الإرسال يدوي مقصود بزر
+   «أرسل للطرف الآخر» على العبارة — لا إرسال تلقائي أبدًا. الوارد يُعرض
+   بطاقة في مربع الطرف الموافق وتُنطق ترجمته تلقائيًا بصوت هذا الهاتف
+   وإعداداته هو للغة الترجمة. قسم الاتصال المشترك هذا يبقى بالعربية؛
+   سلاسل البطاقة وزر الإرسال داخل المربعات من قاموس الطرف الرباعي. */
+var btState = 'off', btConnected = false, btPendingAction = null;
+var btStatusEl = document.getElementById('btStatus');
+var btDevicesEl = document.getElementById('btDevices');
+var btOffBtn = document.getElementById('btOff');
+function btShowStatus(txt, cls) {
+  btStatusEl.textContent = txt;
+  btStatusEl.className = 'bt-status' + (cls ? ' ' + cls : '');
+}
+function btBridgeOk() {
+  if (window.VoiceBridge && VoiceBridge.btStartServer) return true;
+  btShowStatus('⚠️ جسر البلوتوث غير متاح في هذه النسخة', 'err');
+  return false;
+}
+// بوابة الأذونات: تُطلب وقت الاستعمال من الواجهة، وغيابها رسالة واضحة
+function btWithPerms(fn) {
+  if (!btBridgeOk()) return;
+  try {
+    if (VoiceBridge.btPermsOk()) { fn(); return; }
+    btPendingAction = fn;
+    btShowStatus('بانتظار إذن البلوتوث…');
+    VoiceBridge.btRequestPerms();
+  } catch (e) { btShowStatus('⚠️ تعذّر طلب إذن البلوتوث', 'err'); }
+}
+function btStateText(state, peer, listening) {
+  if (state === 'listening') return 'يستمع — بانتظار اتصال هاتف الطرف الآخر…';
+  if (state === 'connecting') return 'جارٍ الاتصال…';
+  if (state === 'connected') return 'متصل بـ' + (peer || 'الهاتف الآخر');
+  if (state === 'disconnected') return listening ? 'انقطع الاتصال — ما زال يستمع' : 'انقطع الاتصال';
+  return 'غير متصل';
+}
+window.__btEvent = function (json) {
+  var ev;
+  try { ev = JSON.parse(json); } catch (e) { return; }
+  if (ev.kind === 'status') {
+    btState = ev.state;
+    btConnected = ev.state === 'connected';
+    btShowStatus(btStateText(ev.state, ev.peer, ev.listening), btConnected ? 'ok' : '');
+    btOffBtn.hidden = !(btConnected || ev.state === 'listening' || ev.listening);
+    refreshSendButtons();
+  } else if (ev.kind === 'error') {
+    btShowStatus('⚠️ ' + (ev.message || 'خطأ بلوتوث'), 'err');
+  } else if (ev.kind === 'perms') {
+    if (ev.granted && btPendingAction) {
+      var fn = btPendingAction; btPendingAction = null; fn();
+    } else if (!ev.granted) {
+      btPendingAction = null;
+      btShowStatus('⚠️ إذن البلوتوث مرفوض — امنحه من إعدادات التطبيق ثم أعد المحاولة', 'err');
+    }
+  } else if (ev.kind === 'device') {
+    btAddDevice(ev.name || '', ev.address, false);
+  } else if (ev.kind === 'discovering') {
+    btShowStatus('جارٍ البحث عن أجهزة قريبة… (تأكد أن الهاتف الآخر يستمع وقابل للاكتشاف)');
+  } else if (ev.kind === 'discoveryDone') {
+    if (!btConnected && btState !== 'listening') btShowStatus('انتهى البحث — اختر جهازًا أو أعد البحث');
+  } else if (ev.kind === 'utterance') {
+    onBtUtterance(ev.packet);
+  }
+};
+function refreshSendButtons() {
+  Object.keys(sides).forEach(function (k) {
+    var S = sides[k];
+    S.el.sendBt.hidden = !(btConnected && S.lastTranslation);
+  });
+}
+document.getElementById('btListen').addEventListener('click', function () {
+  btWithPerms(function () {
+    btShowStatus('جارٍ بدء الاستقبال…');
+    try { VoiceBridge.btStartServer(); } catch (e) { btShowStatus('⚠️ تعذّر بدء الاستقبال', 'err'); }
+  });
+});
+document.getElementById('btFind').addEventListener('click', function () {
+  btWithPerms(function () { btShowDevices(); });
+});
+btOffBtn.addEventListener('click', function () {
+  if (!btBridgeOk()) return;
+  try { VoiceBridge.btDisconnect(); } catch (e) {}
+  btDevicesEl.hidden = true;
+});
+function btShowDevices() {
+  btDevicesEl.innerHTML = '';
+  btDevicesEl.hidden = false;
+  var paired = [];
+  try { paired = JSON.parse(VoiceBridge.btListPaired() || '[]'); } catch (e) {}
+  if (!paired.length) {
+    var d = document.createElement('div');
+    d.className = 'bt-dev';
+    d.innerHTML = '<span class="nm">لا أجهزة مقترنة بعد — اقرن الهاتفين من إعدادات بلوتوث النظام أولًا، أو ابحث:</span>';
+    btDevicesEl.appendChild(d);
+  }
+  paired.forEach(function (p) { btAddDevice(p.name || '', p.address, true); });
+  var row = document.createElement('div');
+  row.className = 'bt-dev';
+  var b = document.createElement('button');
+  b.textContent = '🔍 بحث عن أجهزة جديدة';
+  b.addEventListener('click', function () {
+    btWithPerms(function () { try { VoiceBridge.btStartDiscovery(); } catch (e) {} });
+  });
+  row.appendChild(b);
+  btDevicesEl.appendChild(row);
+}
+function btAddDevice(name, address, paired) {
+  if (!address) return;
+  var existing = btDevicesEl.querySelectorAll('.bt-dev');
+  for (var i = 0; i < existing.length; i++) {
+    if (existing[i].getAttribute('data-addr') === address) return;
+  }
+  var row = document.createElement('div');
+  row.className = 'bt-dev';
+  row.setAttribute('data-addr', address);
+  var nm = document.createElement('span');
+  nm.className = 'nm';
+  nm.textContent = (name || 'جهاز بلا اسم') + (paired ? ' (مقترن)' : '');
+  var ad = document.createElement('span');
+  ad.className = 'addr'; ad.textContent = address;
+  var btn = document.createElement('button');
+  btn.textContent = 'اتصال';
+  btn.addEventListener('click', function () {
+    btWithPerms(function () {
+      btShowStatus('جارٍ الاتصال بـ' + (name || address) + '…');
+      try { VoiceBridge.btConnect(address); } catch (e) { btShowStatus('⚠️ تعذّر بدء الاتصال', 'err'); }
+    });
+  });
+  row.appendChild(nm); row.appendChild(ad); row.appendChild(btn);
+  btDevicesEl.appendChild(row);
+}
+// إرسال عبارة الطرف S الجاهزة إلى الهاتف الآخر — يدوي بضغطة الزر فقط.
+// الحزمة: النص الأصلي + الترجمة + اللغتان + مقطع المتكلم الأصلي إن وُجد
+// لهذه العبارة تحديدًا (تسجيلها الذي أنتج نصها، بلا أي تحرير لاحق).
+function sendToPeer(S) {
+  if (!btConnected || !S.lastTranslation) return;
+  var O = sides[otherKey(S.key)];
+  var pkt = {
+    type: 'utterance',
+    heardText: S.el.heard.value.trim(),
+    translatedText: S.lastTranslation,
+    fromLang: S.lang,
+    toLang: O.lang
+  };
+  if (S._lastAudio && S._lastAudio.length) pkt.audioB64 = pcm16Base64(S._lastAudio);
+  try {
+    VoiceBridge.btSend(JSON.stringify(pkt));
+    flashBtn(S.el.sendBt, '✓ أُرسل');
+  } catch (e) {
+    setStatus(S, '⚠️ تعذّر الإرسال عبر البلوتوث');
+  }
+}
+// عبارة واردة: بطاقة في مربع الطرف الذي لغته لغة الأصل (يمثّل المرسل على
+// هذا الهاتف)، ونطق تلقائي للترجمة بصوت هذا الهاتف وإعداداته للغة الترجمة.
+function onBtUtterance(pkt) {
+  if (!pkt || pkt.type !== 'utterance') return;
+  var host = null, recv = null;
+  Object.keys(sides).forEach(function (k) {
+    if (sides[k].lang === pkt.fromLang) host = sides[k];
+    if (sides[k].lang === pkt.toLang) recv = sides[k];
+  });
+  if (!host) host = recv || sides.A;
+  if (!recv) recv = host;
+  var card = host.el.incoming;
+  card.innerHTML = '';
+  var h = document.createElement('div');
+  h.className = 'inc-head'; h.textContent = t(host, 'fromPeer');
+  var ol = document.createElement('div');
+  ol.className = 'lbl'; ol.textContent = t(host, 'origLbl');
+  var o = document.createElement('div');
+  o.className = 'inc-orig'; o.setAttribute('dir', 'auto'); o.textContent = pkt.heardText || '';
+  var tl = document.createElement('div');
+  tl.className = 'lbl'; tl.textContent = t(host, 'trLbl');
+  var tr = document.createElement('div');
+  tr.className = 'inc-tr'; tr.setAttribute('dir', 'auto'); tr.textContent = pkt.translatedText || '';
+  card.appendChild(h); card.appendChild(ol); card.appendChild(o);
+  card.appendChild(tl); card.appendChild(tr);
+  if (pkt.audioB64) {
+    var b = document.createElement('button');
+    b.className = 'mini'; b.textContent = t(host, 'realVoice');
+    b.addEventListener('click', function () { playRealVoice(pkt.audioB64, b); });
+    card.appendChild(b);
+  }
+  card.hidden = false;
+  if (pkt.translatedText) speakNative(pkt.translatedText, recv.el.voice.value, recv);
+}
+// إعادة تشغيل صوت المتكلم الحقيقي كما وصل — عبر الجسر، بلا أي توليد
+function playRealVoice(b64, btn) {
+  if (!window.VoiceBridge || !b64) return;
+  stopNative();
+  var id = ++ttsSeq;
+  ttsCallbacks[id] = function (ok) { if (!ok) flashBtn(btn, '✗'); };
+  try { VoiceBridge.playAudioClip(b64, id); }
+  catch (e) { delete ttsCallbacks[id]; flashBtn(btn, '✗'); }
+}
 </script>
 </body>
 </html>
