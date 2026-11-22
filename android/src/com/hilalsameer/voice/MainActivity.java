@@ -254,15 +254,24 @@ public class MainActivity extends Activity {
       if (tts != null && voice.equals(ttsVoice)) return;
       File base = new File(getFilesDir(), "tts");
       File espeakDir = extractEspeak(MainActivity.this);
-      File voicesDir = new File(base, "voices");
-      if (!voicesDir.isDirectory()) voicesDir.mkdirs();
-      File model = new File(voicesDir, voice + ".onnx");
-      File tokens = new File(voicesDir, voice + ".tokens.txt");
-      if (!model.exists()) copyAsset(MainActivity.this, "tts/voices/" + voice + ".onnx", model);
-      if (!tokens.exists()) copyAsset(MainActivity.this, "tts/voices/" + voice + ".tokens.txt", tokens);
+      // 1.3 — تقوية مسار الصوت بعد بلاغ «صوت ذكر في الحالتين»:
+      // (أ) مجلد استخراج مستقل لكل صوت تحت جذر جديد كليًا (tts/v13/voices/<voiceId>/)
+      //     فلا يُعاد استعمال أي ملف استخرجته 1.0–1.2 مهما كانت حالته على الجهاز.
+      // (ب) الاستخراج موثّق بالحجم: لا يُقبل ملف إلا بطول أصل الـAPK بايتًا.
+      // (ج) حذف مجلد الاستخراج القديم المشترك (tts/voices) مرة واحدة — ذاكرة
+      //     أصول خالصة تُعاد من الـAPK عند الحاجة، فحذفها آمن ويحرّر المساحة.
+      File legacyDir = new File(base, "voices");
+      if (legacyDir.isDirectory()) deleteRecursive(legacyDir);
+      File voiceDir = new File(new File(base, "v13/voices"), voice);
+      if (!voiceDir.isDirectory()) voiceDir.mkdirs();
+      File model = new File(voiceDir, "model.onnx");
+      File tokens = new File(voiceDir, "tokens.txt");
+      extractVerified("tts/voices/" + voice + ".onnx", model);
+      extractVerified("tts/voices/" + voice + ".tokens.txt", tokens);
       if (tts != null) {
         try { tts.release(); } catch (Exception ignored) {}
         tts = null;
+        ttsVoice = null;
       }
       OfflineTtsVitsModelConfig vits = new OfflineTtsVitsModelConfig();
       vits.setModel(model.getAbsolutePath());
@@ -283,6 +292,36 @@ public class MainActivity extends Activity {
       // AssetManager=null + مسارات ملفات مطلقة → sherpa يقرأ من نظام الملفات (newFromFile)
       tts = new OfflineTts(null, cfg);
       ttsVoice = voice;
+      Log.i(TAG, "tts built voice=" + voice + " model=" + model.getAbsolutePath() + " bytes=" + model.length());
+    }
+
+    // استخراج موثّق بالحجم (1.3): يُقبل الملف المستخرج فقط إن طابق طولُه طولَ
+    // الأصل داخل الـAPK بايتًا (الأصول مخزّنة دون ضغط فيعمل openFd)؛ عند الاختلاف
+    // يُحذف ويُعاد نسخه مرة واحدة، فإن بقي الاختلاف رُفع خطأ مرئي بدل نطقٍ صامت
+    // بنموذج غير موثّق. إن تعذّر openFd سقطنا إلى فحص الوجود كما في 1.0–1.2.
+    private void extractVerified(String assetPath, File dest) throws Exception {
+      long expected = -1;
+      try {
+        android.content.res.AssetFileDescriptor afd = getAssets().openFd(assetPath);
+        expected = afd.getLength();
+        afd.close();
+      } catch (Throwable ignored) {}
+      for (int attempt = 0; attempt < 2; attempt++) {
+        if (dest.exists() && (expected < 0 || dest.length() == expected)) return;
+        if (dest.exists()) dest.delete();
+        copyAsset(MainActivity.this, assetPath, dest);
+      }
+      if (expected >= 0 && dest.length() != expected) {
+        throw new Exception("asset size mismatch: " + assetPath + " got=" + dest.length() + " want=" + expected);
+      }
+    }
+
+    private static void deleteRecursive(File f) {
+      if (f.isDirectory()) {
+        File[] kids = f.listFiles();
+        if (kids != null) for (File k : kids) deleteRecursive(k);
+      }
+      try { f.delete(); } catch (Exception ignored) {}
     }
 
     static File extractEspeak(Activity act) throws Exception {
