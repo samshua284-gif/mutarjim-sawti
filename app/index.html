@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>المترجم الصوتي</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { min-height: 100%; }
+  body {
+    font-family: "Segoe UI", Tahoma, Arial, sans-serif;
+    background: radial-gradient(1200px 800px at 80% -10%, #1d2b52 0%, transparent 60%),
+                radial-gradient(1000px 700px at 0% 110%, #3a2a10 0%, transparent 55%),
+                linear-gradient(160deg, #0b1020 0%, #101828 55%, #0b1020 100%);
+    color: #eef2ff;
+    padding: 14px 12px 30px;
+  }
+  header { text-align: center; margin-bottom: 12px; }
+  header h1 { font-size: 26px; font-weight: 800; letter-spacing: .2px; }
+  header .sub { color: #aebadd; font-size: 13px; margin-top: 4px; }
+  .engines { display: flex; gap: 8px; justify-content: center; margin-top: 10px; flex-wrap: wrap; }
+  .eng {
+    font-size: 12px; color: #cfd8ff; background: rgba(255,255,255,.07);
+    border: 1px solid rgba(255,255,255,.14); border-radius: 999px; padding: 4px 10px;
+  }
+  .eng.ok { color: #8df0b3; border-color: rgba(80,220,140,.4); }
+  .eng.err { color: #ff9d9d; border-color: rgba(255,110,110,.45); }
+  .speedrow {
+    display: flex; align-items: center; gap: 10px; justify-content: center;
+    margin: 12px auto 2px; max-width: 520px;
+    background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.12);
+    border-radius: 14px; padding: 8px 14px; backdrop-filter: blur(8px);
+  }
+  .speedrow label { font-size: 13px; color: #cfd8ff; white-space: nowrap; }
+  .speedrow input[type=range] { flex: 1; accent-color: #ffb020; }
+  .speedrow .val { font-size: 13px; color: #ffb020; min-width: 38px; font-weight: 700; }
+  main { display: flex; flex-direction: column; gap: 14px; max-width: 640px; margin: 0 auto; }
+  .panel {
+    background: rgba(255,255,255,.055); border: 1px solid rgba(255,255,255,.13);
+    border-radius: 20px; padding: 14px; backdrop-filter: blur(10px);
+    box-shadow: 0 10px 30px rgba(0,0,0,.35);
+  }
+  .panel-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .who {
+    font-weight: 800; font-size: 15px; color: #0b1020; background: #ffb020;
+    border-radius: 10px; padding: 5px 10px;
+  }
+  select {
+    flex: 1; min-width: 110px; background: rgba(11,16,32,.85); color: #eef2ff;
+    border: 1px solid rgba(255,255,255,.2); border-radius: 10px; padding: 9px 8px; font-size: 14px;
+  }
+  .speak {
+    width: 100%; margin-top: 12px; border: none; cursor: pointer;
+    font-size: 19px; font-weight: 800; color: #fff; padding: 16px;
+    border-radius: 16px; background: linear-gradient(135deg, #2563eb, #7c3aed);
+    box-shadow: 0 8px 22px rgba(60,80,220,.35);
+  }
+  .speak.recording { background: linear-gradient(135deg, #dc2626, #b45309); animation: pulse 1.1s infinite; }
+  .speak:disabled { opacity: .55; }
+  @keyframes pulse { 0% { filter: brightness(1); } 50% { filter: brightness(1.3); } 100% { filter: brightness(1); } }
+  .status { min-height: 20px; font-size: 13px; color: #ffd97a; margin-top: 8px; text-align: center; }
+  .phrases { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+  .chip {
+    font-size: 12.5px; cursor: pointer; color: #ffe1a8; background: rgba(255,176,32,.12);
+    border: 1px solid rgba(255,176,32,.4); border-radius: 999px; padding: 6px 11px;
+  }
+  .lbl { display: block; font-size: 12.5px; color: #aebadd; margin: 12px 2px 5px; }
+  textarea {
+    width: 100%; background: rgba(11,16,32,.75); color: #fff; font-size: 16px; line-height: 1.5;
+    border: 1px solid rgba(255,255,255,.18); border-radius: 12px; padding: 10px; resize: vertical;
+    font-family: inherit;
+  }
+  .translation {
+    min-height: 52px; background: rgba(20,40,30,.55); border: 1px solid rgba(80,220,140,.35);
+    border-radius: 12px; padding: 10px; font-size: 17px; line-height: 1.55; white-space: pre-wrap;
+  }
+  .row { display: flex; gap: 8px; margin-top: 8px; }
+  .mini {
+    flex: 1; cursor: pointer; font-size: 13.5px; padding: 9px 6px; border-radius: 10px;
+    background: rgba(255,255,255,.09); color: #eef2ff; border: 1px solid rgba(255,255,255,.18);
+  }
+  .mini:active { background: rgba(255,255,255,.2); }
+  .suggest {
+    margin-top: 8px; background: rgba(255,176,32,.14); border: 1px dashed rgba(255,176,32,.65);
+    border-radius: 12px; padding: 9px 10px; font-size: 14px;
+    display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+  }
+  .suggest[hidden] { display: none; }
+  .suggest .txt { flex: 1; }
+  .suggest button {
+    cursor: pointer; border-radius: 8px; padding: 6px 12px; font-size: 13px; border: 1px solid rgba(255,255,255,.25);
+  }
+  .suggest .yes { background: #ffb020; color: #0b1020; font-weight: 700; border: none; }
+  .suggest .no { background: transparent; color: #cfd8ff; }
+  footer { text-align: center; color: #7787b3; font-size: 12px; margin-top: 16px; line-height: 1.7; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🎙️ المترجم الصوتي</h1>
+  <div class="sub">محادثة صوتية دون اتصال — العربية هي المحور</div>
+  <div class="engines">
+    <span class="eng" id="asrStatus">السمع: لم يُحمَّل بعد</span>
+    <span class="eng" id="mtStatus">الترجمة: لم تُحمَّل بعد</span>
+    <span class="eng" id="ttsStatus">النطق: أصلي داخل الجهاز</span>
+  </div>
+  <div class="speedrow">
+    <label for="speed">سرعة النطق</label>
+    <input type="range" id="speed" min="0.5" max="2" step="0.1" value="1">
+    <span class="val" id="speedVal">1.0×</span>
+  </div>
+</header>
+<main id="panels"></main>
+<footer>
+  كل شيء يعمل على جهازك دون أي اتصال: السمع بـWhisper، والترجمة بـNLLB، والنطق بأصوات Piper عبر sherpa-onnx.<br>
+  تحدّث بجُمل قصيرة وقرّب الهاتف من فمك — الدقة ترتفع كثيرًا.
+</footer>
+
+<script>
+'use strict';
+/* ================= الثوابت ================= */
+var LANGS = {
+  ar: { name: 'العربية', whisper: 'arabic', nllb: 'arb_Arab' },
+  en: { name: 'English — الإنجليزية', whisper: 'english', nllb: 'eng_Latn' },
+  hi: { name: 'हिन्दी — الهندية', whisper: 'hindi', nllb: 'hin_Deva' },
+  ur: { name: 'اردو — الأردية', whisper: 'urdu', nllb: 'urd_Arab' }
+};
+var LANG_ORDER = ['ar', 'en', 'hi', 'ur'];
+// الأصوات المتاحة فعليًا داخل التطبيق لكل لغة (من حزمة Piper المُثبتة) — لا يُعرض صوت غير موجود
+var VOICES = {
+  ar: [ { id: 'ar_JO-kareem-medium', label: 'ذكر' } ],
+  en: [ { id: 'en_US-lessac-medium', label: 'أنثى' }, { id: 'en_US-ryan-medium', label: 'ذكر' } ],
+  hi: [ { id: 'hi_IN-priyamvada-medium', label: 'أنثى' }, { id: 'hi_IN-pratham-medium', label: 'ذكر' } ],
+  ur: [ { id: 'ur_PK-aegis_female-medium', label: 'أنثى' }, { id: 'ur_PK-fasih-medium', label: 'ذكر' } ]
+};
+// عبارات جاهزة: نص ثابت لكل لغة — إن تطابق النص المسموع مع عبارة، تُستخدم صيغتها الثابتة
+// في اللغة الأخرى مباشرة دون المرور بنموذج الترجمة (تحية الأردية خصوصًا لا تُهلوس أبدًا)
+var PHRASES = [
+  { id: 'greeting', chip: '👋 تحية', ar: 'السلام عليكم، كيف حالك؟', en: 'Hello, how are you?', hi: 'नमस्ते, आप कैसे हैं?', ur: 'السلام علیکم، آپ کیسے ہیں؟' },
+  { id: 'thanks', chip: '🙏 شكرًا', ar: 'شكرًا جزيلًا', en: 'Thank you very much', hi: 'बहुत धन्यवाद', ur: 'بہت شکریہ' },
+  { id: 'price', chip: '💰 كم السعر؟', ar: 'كم سعر هذا؟', en: 'How much does this cost?', hi: 'इसकी कीमत कितनी है?', ur: 'اس کی قیمت کتنی ہے؟' },
+  { id: 'hospital', chip: '🏥 أقرب مستشفى', ar: 'من فضلك خذني إلى أقرب مستشفى.', en: 'Please take me to the nearest hospital.', hi: 'कृपया मुझे निकटतम अस्पताल ले चलें।', ur: 'براہ کرم مجھے قریبی اسپتال لے چلیں۔' },
+  { id: 'bathroom', chip: '🚻 أين الحمام؟', ar: 'أين الحمام؟', en: 'Where is the bathroom?', hi: 'शौचालय कहाँ है?', ur: 'باتھ روم کہاں ہے؟' }
+];
+
+/* ================= أدوات نصية: تطبيع ومطابقة ضبابية آمنة ================= */
+function normalizeText(s) {
+  return String(s || '')
+    .replace(/[ً-ٰٟـ]/g, '')       // تشكيل عربي وتطويل
+    .replace(/[।.,!?؟،؛:;«»"“”'’()\-]/g, ' ')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+function lev(a, b) {
+  var m = a.length, n = b.length;
+  if (!m) return n; if (!n) return m;
+  var prev = [], cur = [], i, j;
+  for (j = 0; j <= n; j++) prev[j] = j;
+  for (i = 1; i <= m; i++) {
+    cur[0] = i;
+    for (j = 1; j <= n; j++) {
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    }
+    var t = prev; prev = cur; cur = t;
+  }
+  return prev[n];
+}
+function similarity(a, b) {
+  var na = normalizeText(a), nb = normalizeText(b);
+  if (!na || !nb) return 0;
+  if (na === nb) return 1;
+  return 1 - lev(na, nb) / Math.max(na.length, nb.length);
+}
+function matchPhrase(text, lang) {
+  var best = null, bestScore = 0;
+  PHRASES.forEach(function (p) {
+    var s = similarity(text, p[lang]);
+    if (s > bestScore) { bestScore = s; best = p; }
+  });
+  return { phrase: best, score: bestScore };
+}
+
+/* ================= العمال (السمع والترجمة) ================= */
+function makeEngine(kind, workerFile, statusEl, timeoutMs) {
+  var worker = null, seq = 0, pending = {};
+  var ready = false, loading = false;
+  function setStatus(txt, cls) {
+    statusEl.textContent = (kind === 'asr' ? 'السمع: ' : 'الترجمة: ') + txt;
+    statusEl.className = 'eng' + (cls ? ' ' + cls : '');
+  }
+  function ensure() {
+    if (worker) return worker;
+    worker = new Worker('engines/' + workerFile, { type: 'module' });
+    loading = true; setStatus('جارٍ التحميل…');
+    worker.onmessage = function (e) {
+      var d = e.data || {};
+      if (d.type === 'progress') {
+        if (d.status === 'progress' && typeof d.progress === 'number')
+          setStatus('جارٍ التحميل… ' + Math.round(d.progress) + '%');
+        else if (d.status === 'ready' || d.status === 'done') setStatus('يُجهّز…');
+      } else if (d.type === 'ready') {
+        ready = true; loading = false; setStatus('جاهز', 'ok');
+        if (engine.onready) engine.onready();
+      } else if (d.type === 'load-error') {
+        loading = false; setStatus('فشل التحميل — سيُعاد عند الحاجة', 'err');
+        kill();
+      } else if (d.type === kind + '-done' || d.type === kind + '-error') {
+        var p = pending[d.id];
+        if (!p) return;
+        delete pending[d.id];
+        clearTimeout(p.timer);
+        if (d.type === kind + '-done') p.done(kind === 'asr' ? d.text : d.result);
+        else p.fail(d.message);
+      }
+    };
+    worker.onerror = function () {
+      setStatus('خطأ — سيُعاد البناء عند الحاجة', 'err');
+      kill();
+      Object.keys(pending).forEach(function (k) { pending[k].fail('worker'); delete pending[k]; });
+    };
+    worker.postMessage({ type: 'load' });
+    return worker;
+  }
+  function kill() {
+    if (worker) { try { worker.terminate(); } catch (e) {} worker = null; }
+    ready = false; loading = false;
+  }
+  var engine = {
+    onready: null,
+    request: function (msg) {
+      return new Promise(function (resolve, reject) {
+        var id = ++seq;
+        var timer = setTimeout(function () {
+          if (pending[id]) { delete pending[id]; kill(); reject(new Error('timeout')); }
+        }, timeoutMs);
+        pending[id] = { done: resolve, fail: reject, timer: timer };
+        msg.id = id;
+        try { ensure().postMessage(msg); }
+        catch (e) { clearTimeout(timer); delete pending[id]; reject(e); }
+      });
+    },
+    preload: function () { try { ensure(); } catch (e) {} }
+  };
+  return engine;
+}
+var asrEngine = makeEngine('asr', 'asr-worker.js', document.getElementById('asrStatus'), 600000);
+var mtEngine = makeEngine('mt', 'mt-worker.js', document.getElementById('mtStatus'), 300000);
+// تحميل متسلسل: السمع أولًا ثم الترجمة (حماية لذاكرة الهاتف)
+asrEngine.onready = function () { mtEngine.preload(); };
+asrEngine.preload();
+
+/* ================= النطق الأصلي والنسخ عبر الجسر ================= */
+var ttsSeq = 0, ttsCallbacks = {};
+window.__ttsCallback = function (id, ok, err) {
+  var cb = ttsCallbacks[id];
+  delete ttsCallbacks[id];
+  if (cb) cb(!!ok, err || '');
+};
+var speaking = false;
+function speakNative(text, voiceId) {
+  return new Promise(function (resolve) {
+    if (!window.VoiceBridge || !text) { resolve(false); return; }
+    var id = ++ttsSeq;
+    speaking = true;
+    ttsCallbacks[id] = function (ok) { speaking = false; resolve(ok); };
+    try { VoiceBridge.speak(text, voiceId, parseFloat(speedInput.value), id); }
+    catch (e) { speaking = false; delete ttsCallbacks[id]; resolve(false); }
+  });
+}
+function stopNative() {
+  if (window.VoiceBridge) { try { VoiceBridge.stopSpeak(); } catch (e) {} }
+}
+function copyNative(text, btn) {
+  if (!text) return;
+  if (window.VoiceBridge) { try { VoiceBridge.copyText(text); flashBtn(btn, '✓ نُسخ'); return; } catch (e) {} }
+  if (navigator.clipboard) navigator.clipboard.writeText(text).then(function () { flashBtn(btn, '✓ نُسخ'); }, function () {});
+}
+function flashBtn(btn, txt) {
+  if (!btn) return;
+  var old = btn.textContent;
+  btn.textContent = txt;
+  setTimeout(function () { btn.textContent = old; }, 1200);
+}
+
+/* ================= التسجيل ================= */
+var recorder = null; // {stream, ctx, proc, chunks, rate, side}
+function resampleTo16k(samples, fromRate) {
+  if (fromRate === 16000) return samples;
+  var ratio = fromRate / 16000;
+  var outLen = Math.floor(samples.length / ratio);
+  var out = new Float32Array(outLen);
+  for (var i = 0; i < outLen; i++) {
+    var pos = i * ratio, idx = Math.floor(pos), frac = pos - idx;
+    var a = samples[idx] || 0, b = samples[idx + 1] || 0;
+    out[i] = a + (b - a) * frac;
+  }
+  return out;
+}
+function startRecording(side) {
+  return navigator.mediaDevices.getUserMedia({ audio: true }).then(function (stream) {
+    var AC = window.AudioContext || window.webkitAudioContext;
+    var ctx = new AC();
+    var src = ctx.createMediaStreamSource(stream);
+    var proc = ctx.createScriptProcessor(4096, 1, 1);
+    var chunks = [];
+    proc.onaudioprocess = function (ev) {
+      chunks.push(new Float32Array(ev.inputBuffer.getChannelData(0)));
+    };
+    src.connect(proc); proc.connect(ctx.destination);
+    recorder = { stream: stream, ctx: ctx, proc: proc, src: src, chunks: chunks, rate: ctx.sampleRate, side: side };
+  });
+}
+function stopRecording() {
+  if (!recorder) return null;
+  var r = recorder; recorder = null;
+  try { r.proc.disconnect(); r.src.disconnect(); } catch (e) {}
+  r.stream.getTracks().forEach(function (t) { t.stop(); });
+  var total = 0, i;
+  for (i = 0; i < r.chunks.length; i++) total += r.chunks[i].length;
+  var all = new Float32Array(total), off = 0;
+  for (i = 0; i < r.chunks.length; i++) { all.set(r.chunks[i], off); off += r.chunks[i].length; }
+  try { r.ctx.close(); } catch (e) {}
+  return { audio: resampleTo16k(all, r.rate), side: r.side };
+}
+
+/* ================= بناء الطرفين ================= */
+var speedInput = document.getElementById('speed');
+var speedVal = document.getElementById('speedVal');
+speedInput.addEventListener('input', function () { speedVal.textContent = Number(speedInput.value).toFixed(1) + '×'; });
+
+var sides = {};
+function otherKey(k) { return k === 'A' ? 'B' : 'A'; }
+
+function buildPanel(key, title, defaultLang) {
+  var main = document.getElementById('panels');
+  var sec = document.createElement('section');
+  sec.className = 'panel';
+  sec.innerHTML =
+    '<div class="panel-head"><span class="who">' + title + '</span>' +
+    '<select class="lang"></select><select class="voice"></select></div>' +
+    '<button class="speak">🎤 تحدّث</button>' +
+    '<div class="status"></div>' +
+    '<div class="phrases"></div>' +
+    '<label class="lbl">ما سُمع (أو اكتبه بنفسك — وضع الكتابة):</label>' +
+    '<textarea class="heard" rows="2" dir="auto" placeholder="…"></textarea>' +
+    '<div class="suggest" hidden><span class="txt"></span>' +
+    '<button class="yes">قبول التصحيح</button><button class="no">تجاهل</button></div>' +
+    '<div class="row"><button class="mini copy-heard">📋 نسخ النص</button>' +
+    '<button class="mini translate">🔁 ترجم ونطق</button></div>' +
+    '<label class="lbl">الترجمة بلغة الطرف الآخر:</label>' +
+    '<div class="translation" dir="auto"></div>' +
+    '<div class="row"><button class="mini copy-tr">📋 نسخ الترجمة</button>' +
+    '<button class="mini speak-tr">🔊 نطق الترجمة</button></div>';
+  main.appendChild(sec);
+
+  var S = {
+    key: key, lang: defaultLang,
+    el: {
+      lang: sec.querySelector('.lang'), voice: sec.querySelector('.voice'),
+      speak: sec.querySelector('.speak'), status: sec.querySelector('.status'),
+      phrases: sec.querySelector('.phrases'), heard: sec.querySelector('.heard'),
+      suggest: sec.querySelector('.suggest'), suggestTxt: sec.querySelector('.suggest .txt'),
+      suggestYes: sec.querySelector('.suggest .yes'), suggestNo: sec.querySelector('.suggest .no'),
+      copyHeard: sec.querySelector('.copy-heard'), translate: sec.querySelector('.translate'),
+      translation: sec.querySelector('.translation'),
+      copyTr: sec.querySelector('.copy-tr'), speakTr: sec.querySelector('.speak-tr')
+    },
+    recording: false, busy: false, lastTranslation: ''
+  };
+  sides[key] = S;
+
+  LANG_ORDER.forEach(function (code) {
+    var o = document.createElement('option');
+    o.value = code; o.textContent = LANGS[code].name;
+    S.el.lang.appendChild(o);
+  });
+  S.el.lang.value = defaultLang;
+  fillVoices(S);
+  S.el.lang.addEventListener('change', function () { S.lang = S.el.lang.value; fillVoices(S); });
+
+  PHRASES.forEach(function (p) {
+    var b = document.createElement('button');
+    b.className = 'chip'; b.textContent = p.chip;
+    b.addEventListener('click', function () {
+      S.el.heard.value = p[S.lang];
+      hideSuggest(S);
+      runTranslation(S, true);
+    });
+    S.el.phrases.appendChild(b);
+  });
+
+  S.el.speak.addEventListener('click', function () { toggleSpeak(S); });
+  S.el.translate.addEventListener('click', function () { runTranslation(S, true); });
+  S.el.copyHeard.addEventListener('click', function () { copyNative(S.el.heard.value.trim(), S.el.copyHeard); });
+  S.el.copyTr.addEventListener('click', function () { copyNative(S.lastTranslation, S.el.copyTr); });
+  S.el.speakTr.addEventListener('click', function () {
+    if (speaking) { stopNative(); return; }
+    if (S.lastTranslation) speakFor(S, S.lastTranslation);
+  });
+  S.el.suggestYes.addEventListener('click', function () {
+    var p = S._suggested;
+    hideSuggest(S);
+    if (p) { S.el.heard.value = p[S.lang]; runTranslation(S, true); }
+  });
+  S.el.suggestNo.addEventListener('click', function () { hideSuggest(S); });
+  return S;
+}
+function fillVoices(S) {
+  S.el.voice.innerHTML = '';
+  VOICES[S.lang].forEach(function (v) {
+    var o = document.createElement('option');
+    o.value = v.id; o.textContent = 'صوت: ' + v.label;
+    S.el.voice.appendChild(o);
+  });
+}
+function setStatus(S, txt) { S.el.status.textContent = txt || ''; }
+function hideSuggest(S) { S.el.suggest.hidden = true; S._suggested = null; }
+
+function toggleSpeak(S) {
+  if (S.recording) { finishRecording(S); return; }
+  if (recorder) { setStatus(S, 'الطرف الآخر يسجّل الآن…'); return; }
+  if (S.busy) return;
+  stopNative();
+  setStatus(S, 'جارٍ فتح الميكروفون…');
+  startRecording(S.key).then(function () {
+    S.recording = true;
+    S.el.speak.textContent = '⏹ إيقاف وترجمة';
+    S.el.speak.classList.add('recording');
+    setStatus(S, '🎙️ أسمعك… تحدّث الآن، ثم اضغط إيقاف');
+    S._recTimer = setTimeout(function () { if (S.recording) finishRecording(S); }, 45000);
+  }).catch(function () {
+    setStatus(S, 'تعذّر فتح الميكروفون — امنح الإذن من إعدادات التطبيق');
+  });
+}
+function finishRecording(S) {
+  clearTimeout(S._recTimer);
+  S.recording = false;
+  S.el.speak.textContent = '🎤 تحدّث';
+  S.el.speak.classList.remove('recording');
+  var rec = stopRecording();
+  if (!rec || !rec.audio.length) { setStatus(S, 'لم يُلتقط صوت'); return; }
+  S.busy = true;
+  setStatus(S, 'جارٍ تحويل كلامك إلى نص… (قد يطول أول مرة)');
+  asrEngine.request({ type: 'asr', audio: rec.audio, whisperLang: LANGS[S.lang].whisper }).then(function (text) {
+    S.busy = false;
+    if (!text) { setStatus(S, 'لم أميّز كلامًا واضحًا — قرّب الهاتف وجرّب بجملة قصيرة'); return; }
+    S.el.heard.value = text;
+    // مطابقة ضبابية آمنة: اقتراح فقط، لا تصحيح صامت أبدًا
+    var m = matchPhrase(text, S.lang);
+    if (m.phrase && m.score >= 0.8 && normalizeText(text) !== normalizeText(m.phrase[S.lang])) {
+      S._suggested = m.phrase;
+      S.el.suggestTxt.textContent = 'هل قصدت: «' + m.phrase[S.lang] + '»؟';
+      S.el.suggest.hidden = false;
+    } else hideSuggest(S);
+    runTranslation(S, true);
+  }).catch(function () {
+    S.busy = false;
+    setStatus(S, 'تعذّر السمع — أعد المحاولة');
+  });
+}
+
+// ترجمة نص الطرف S إلى لغة الطرف الآخر ثم نطقه بصوت الطرف الآخر
+function runTranslation(S, speakAfter) {
+  var text = S.el.heard.value.trim();
+  if (!text) { setStatus(S, 'لا نص بعد — تحدّث أو اكتب أولًا'); return; }
+  var O = sides[otherKey(S.key)];
+  var src = S.lang, tgt = O.lang;
+  var done = function (result) {
+    S.lastTranslation = result;
+    S.el.translation.textContent = result;
+    setStatus(S, 'تمت الترجمة' + (speakAfter ? ' — جارٍ النطق…' : ''));
+    if (speakAfter) speakFor(S, result);
+    else setStatus(S, 'تمت الترجمة');
+  };
+  // عبارة جاهزة مطابقة؟ خذ صيغتها الثابتة في لغة الهدف مباشرة
+  var m = matchPhrase(text, src);
+  if (m.phrase && m.score === 1) { done(m.phrase[tgt]); return; }
+  if (src === tgt) { done(text); return; }
+  setStatus(S, 'جارٍ الترجمة…');
+  mtEngine.request({ type: 'mt', text: text, srcLang: LANGS[src].nllb, tgtLang: LANGS[tgt].nllb })
+    .then(done)
+    .catch(function () { setStatus(S, 'تعذّرت الترجمة — أعد المحاولة'); });
+}
+// نطق ترجمة الطرف S بصوت الطرف الآخر ولغته
+function speakFor(S, text) {
+  var O = sides[otherKey(S.key)];
+  var voice = O.el.voice.value;
+  speakNative(text, voice).then(function (ok) {
+    if (!ok) setStatus(S, 'تعذّر النطق');
+    else setStatus(S, 'تمت الترجمة والنطق ✓');
+  });
+}
+
+buildPanel('A', 'الطرف أ', 'ar');
+buildPanel('B', 'الطرف ب', 'en');
+</script>
+</body>
+</html>
