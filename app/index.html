@@ -25,6 +25,7 @@
   }
   .eng.ok { color: #8df0b3; border-color: rgba(80,220,140,.4); }
   .eng.err { color: #ff9d9d; border-color: rgba(255,110,110,.45); }
+  .hint { color: #7787b3; font-size: 12px; margin-top: 8px; text-align: center; }
   .speedrow {
     display: flex; align-items: center; gap: 10px; justify-content: center;
     margin: 12px auto 2px; max-width: 520px;
@@ -145,6 +146,7 @@
     <span class="eng" id="mtStatus">الترجمة: لم تُحمَّل بعد</span>
     <span class="eng" id="ttsStatus">النطق: أصلي داخل الجهاز</span>
   </div>
+  <div class="hint">الترجمة أكثر كفاءة مع عدم التشويش والضجيج</div>
   <div class="speedrow">
     <label for="speed">سرعة النطق</label>
     <input type="range" id="speed" min="0.5" max="2" step="0.1" value="1">

@@ -1,5 +1,5 @@
 #!/bin/bash
-# بناء APK «المترجم الصوتي» 1.9 — دون اتصال بالكامل:
+# بناء APK «المترجم الصوتي» 1.10 — دون اتصال بالكامل:
 # سمع أصلي عبر sherpa-onnx بسلسلة سقوط 1.4/1.5: Whisper-small أصليًا
 # ثم عامل ويب Transformers.js عند فشل الأصلي (أُزيلت أذن 1.6 التجريبية
 # كليًا في 1.7 — ملفات وجسرًا — بحكم Hilal التجريبي على هاتفه)
@@ -10,11 +10,13 @@
 # (app/index.html): قاعدة «الن»←«الآن» وزوج «سلطانة أمان»←«سلطنة عُمان»
 # (مع ترقية مدخل oman-full) صارتا تصحيحًا تلقائيًا بدل اقتراح معلّق —
 # بقية 1.8 حرفيًا.
+# + (1.10) سطر تلميح واحد في الصفحة تحت شارات الحالة بأمر Hilal الحرفي:
+# «الترجمة أكثر كفاءة مع عدم التشويش والضجيج» — تغيير صفحة فقط، بقية 1.9 حرفيًا.
 # لا إذن إنترنت في أي إصدار — البلوتوث ليس إنترنت.
 # درس إلزامي من ناسخ الكلمات: MainActivity.java يُعاد كتابته هنا داخل السكربت (heredoc) — أي تعديل عليه يكون هنا.
 set -e
 exec > >(tee -a "$HOME/workspace/voice-translator/android/build.log") 2>&1
-echo "=== VOICE TRANSLATOR BUILD (APK 1.9) START $(date) ==="
+echo "=== VOICE TRANSLATOR BUILD (APK 1.10) START $(date) ==="
 
 PROJ="$HOME/workspace/voice-translator/android"
 APP="$HOME/workspace/voice-translator/app"
@@ -27,7 +29,7 @@ AJAR="$SDK/platforms/android-34/android.jar"
 BT="$SDK/build-tools/34.0.0"
 SHERPA_JAR="$HOME/workspace/voice-translator/sherpa-aar/extracted-1.12.40/classes.jar"
 KOTLIN_JAR="$SDK/cmdline-tools/latest/lib/external/org/jetbrains/kotlin/kotlin-stdlib/1.9.0/kotlin-stdlib-1.9.0.jar"
-OUT="$HOME/workspace/voice-translator/voice-translator-1.9.apk"
+OUT="$HOME/workspace/voice-translator/voice-translator-1.10.apk"
 
 cd "$PROJ"
 mkdir -p assets/www/engines/models gen classes dex src/com/hilalsameer/voice res/values stage
@@ -76,7 +78,7 @@ cat > AndroidManifest.xml <<'EOF'
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.hilalsameer.voice"
-    android:versionCode="10" android:versionName="1.9">
+    android:versionCode="11" android:versionName="1.10">
   <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="34"/>
   <uses-permission android:name="android.permission.RECORD_AUDIO"/>
   <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS"/>
