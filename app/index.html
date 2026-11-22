@@ -180,6 +180,16 @@ function matchPhrase(text, lang) {
   });
   return { phrase: best, score: bestScore };
 }
+// مسار العبارات الجاهزة التلقائي (إصلاح 1.1): لا يعمل إلا على تطابق كامل للنص
+// كله مع عبارة واحدة بعد التطبيع — لا تطابق جزئي ولا «أقرب عبارة» أبدًا.
+function exactPhrase(text, lang) {
+  var n = normalizeText(text);
+  if (!n) return null;
+  for (var i = 0; i < PHRASES.length; i++) {
+    if (normalizeText(PHRASES[i][lang]) === n) return PHRASES[i];
+  }
+  return null;
+}
 
 /* ================= العمال (السمع والترجمة) ================= */
 function makeEngine(kind, workerFile, statusEl, timeoutMs) {
@@ -473,9 +483,9 @@ function runTranslation(S, speakAfter) {
     if (speakAfter) speakFor(S, result);
     else setStatus(S, 'تمت الترجمة');
   };
-  // عبارة جاهزة مطابقة؟ خذ صيغتها الثابتة في لغة الهدف مباشرة
-  var m = matchPhrase(text, src);
-  if (m.phrase && m.score === 1) { done(m.phrase[tgt]); return; }
+  // عبارة جاهزة مطابقة للنص كله؟ خذ صيغتها الثابتة في لغة الهدف مباشرة
+  var exact = exactPhrase(text, src);
+  if (exact) { done(exact[tgt]); return; }
   if (src === tgt) { done(text); return; }
   setStatus(S, 'جارٍ الترجمة…');
   mtEngine.request({ type: 'mt', text: text, srcLang: LANGS[src].nllb, tgtLang: LANGS[tgt].nllb })

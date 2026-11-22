@@ -1,10 +1,10 @@
 #!/bin/bash
-# بناء APK «المترجم الصوتي» 1.0 — دون اتصال بالكامل:
+# بناء APK «المترجم الصوتي» 1.1 — دون اتصال بالكامل:
 # سمع Whisper-small + ترجمة NLLB (Transformers.js داخل WebView) + نطق Piper أصلي عبر sherpa-onnx.
 # درس إلزامي من ناسخ الكلمات: MainActivity.java يُعاد كتابته هنا داخل السكربت (heredoc) — أي تعديل عليه يكون هنا.
 set -e
 exec > >(tee -a "$HOME/workspace/voice-translator/android/build.log") 2>&1
-echo "=== VOICE TRANSLATOR BUILD (APK 1.0) START $(date) ==="
+echo "=== VOICE TRANSLATOR BUILD (APK 1.1) START $(date) ==="
 
 PROJ="$HOME/workspace/voice-translator/android"
 APP="$HOME/workspace/voice-translator/app"
@@ -17,7 +17,7 @@ AJAR="$SDK/platforms/android-34/android.jar"
 BT="$SDK/build-tools/34.0.0"
 SHERPA_JAR="$HOME/workspace/voice-translator/sherpa-aar/extracted-1.12.40/classes.jar"
 KOTLIN_JAR="$SDK/cmdline-tools/latest/lib/external/org/jetbrains/kotlin/kotlin-stdlib/1.9.0/kotlin-stdlib-1.9.0.jar"
-OUT="$HOME/workspace/voice-translator/voice-translator-1.0.apk"
+OUT="$HOME/workspace/voice-translator/voice-translator-1.1.apk"
 
 cd "$PROJ"
 mkdir -p assets/www/engines/models gen classes dex src/com/hilalsameer/voice res/values stage
@@ -55,7 +55,7 @@ cat > AndroidManifest.xml <<'EOF'
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.hilalsameer.voice"
-    android:versionCode="1" android:versionName="1.0">
+    android:versionCode="2" android:versionName="1.1">
   <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="34"/>
   <uses-permission android:name="android.permission.RECORD_AUDIO"/>
   <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS"/>

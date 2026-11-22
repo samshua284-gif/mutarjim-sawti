@@ -1,5 +1,14 @@
 // عامل الترجمة: NLLB-200-distilled-600M (مكمّى) عبر Transformers.js — ترجمة مباشرة
 // بين اللغات الأربع بلا وسيط إنجليزي، من أصول التطبيق المحلية فقط.
+//
+// إصلاح 1.1 (بعد اختبار الهاتف): الترجمة جملة-بجملة حصرًا، بلا أي دمج.
+// السبب الجذري المُثبت بإعادة الإنتاج على الخادم: دمج عدة جمل في قطعة واحدة
+// (≤350 حرفًا كما في 1.0) يجعل NLLB يُسقط جملًا كاملة بصمت من داخل القطعة
+// (سقطت «أين أنتم؟» و"How are you?" في الإدخالين الفاشلين، وأُعيد إنتاجهما حرفيًا).
+// ومع كل جملة: حارس اكتمال — نتيجة فارغة تُعاد ترجمتها مرة، فإن بقيت فارغة
+// يُمرَّر نص الجملة الأصلي نفسه بدل إسقاطها. لا سقوط صامت أبدًا.
+// خيارات التوليد: الافتراضية (= جشعة num_beams=1 فعليًا) — قياس 1.1 أثبت أن
+// num_beams=2 أبطأ ~3 مرات ولا يمنع الإسقاط ولا يحسّن الجودة هنا.
 import { pipeline, env } from './transformers.min.js';
 
 var BASE = new URL('./', self.location.href).href; // .../engines/
@@ -24,7 +33,8 @@ function load() {
   return pipePromise;
 }
 
-// تقسيم النص الطويل إلى جمل ثم دمجها في أجزاء ≤350 حرفًا (سياق أتمّ واستدعاءات أقل)
+// تقسيم النص إلى وحدات ترجمة: جُمل، وأي جملة أطول من 400 حرف تُقسَّم عند
+// فاصلة عربية أو مسافة (كما في 1.0) — لكن كل وحدة تُترجم وحدها وتُحاسَب وحدها.
 function splitSentences(t) {
   var raw = String(t).split(/(?<=[.!?؟।])\s+|\n+/);
   var out = [];
@@ -41,16 +51,22 @@ function splitSentences(t) {
   }
   return out.length ? out : [String(t)];
 }
-function mergeChunks(parts) {
-  var out = [];
-  var cur = '';
-  parts.forEach(function (s) {
-    if (!cur) { cur = s; return; }
-    if ((cur + ' ' + s).length <= 350) cur += ' ' + s;
-    else { out.push(cur); cur = s; }
+
+function translateOnce(pipe, unit, srcLang, tgtLang) {
+  return pipe(unit, { src_lang: srcLang, tgt_lang: tgtLang }).then(function (r) {
+    return ((r && r[0] && r[0].translation_text) || '').trim();
+  }).catch(function () { return ''; });
+}
+
+// ترجمة وحدة واحدة مع حارس الاكتمال: محاولة، فإعادة عند الفراغ/الفشل،
+// فتمرير النص الأصلي نفسه (مرئيًا في النتيجة) بدل إسقاطه بصمت.
+function translateUnit(pipe, unit, srcLang, tgtLang) {
+  return translateOnce(pipe, unit, srcLang, tgtLang).then(function (first) {
+    if (first) return first;
+    return translateOnce(pipe, unit, srcLang, tgtLang).then(function (second) {
+      return second || unit;
+    });
   });
-  if (cur) out.push(cur);
-  return out;
 }
 
 self.onmessage = function (e) {
@@ -66,17 +82,21 @@ self.onmessage = function (e) {
   }
   if (d.type === 'mt') {
     load().then(function (pipe) {
-      var chunks = mergeChunks(splitSentences(d.text));
+      var units = splitSentences(d.text);
       var out = [];
       var chain = Promise.resolve();
-      chunks.forEach(function (ch) {
+      units.forEach(function (u) {
         chain = chain.then(function () {
-          return pipe(ch, { src_lang: d.srcLang, tgt_lang: d.tgtLang }).then(function (r) {
-            out.push((r && r[0] && r[0].translation_text) || ch);
-          }).catch(function () { out.push(ch); });
+          return translateUnit(pipe, u, d.srcLang, d.tgtLang).then(function (r) { out.push(r); });
         });
       });
-      return chain.then(function () { return out.join(' '); });
+      return chain.then(function () {
+        // حارس أخير: عدد وحدات الخرج يساوي عدد وحدات الدخل ببنية التصميم،
+        // وأي خرج كلي فارغ لدخل غير فارغ يُستبدل بالدخل نفسه — لا نتيجة فارغة صامتة.
+        var result = out.join(' ');
+        if (!result.trim() && String(d.text).trim()) result = String(d.text);
+        return result;
+      });
     }).then(function (result) {
       self.postMessage({ type: 'mt-done', id: d.id, result: result });
     }).catch(function (err) {

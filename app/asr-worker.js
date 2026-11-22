@@ -1,5 +1,7 @@
 // عامل السمع: Whisper-small (مكمّى) عبر Transformers.js — من أصول التطبيق المحلية فقط.
 // يعمل في خيط خلفي كي لا تتجمد الواجهة أثناء التعرف على الكلام.
+// إصلاح 1.1: num_beams=1 بدل 2 — قياس الخادم على 5 عيّنات صوتية أعطى نصوصًا
+// مطابقة حرفيًا في الإعدادين وبزمن أقل ~30% مع الجشع (62.0s مقابل 88.8s).
 import { pipeline, env } from './transformers.min.js';
 
 var BASE = new URL('./', self.location.href).href; // .../engines/
@@ -41,7 +43,7 @@ self.onmessage = function (e) {
       return pipe(d.audio, {
         language: d.whisperLang,
         task: 'transcribe',
-        num_beams: 2,
+        num_beams: 1,
         chunk_length_s: 30,
         stride_length_s: 5
       });
