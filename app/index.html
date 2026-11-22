@@ -196,6 +196,8 @@ var PHRASES = [
 // فقط شبكةَ أمانٍ لأخطاء السمع في الأسماء والأصول (قال «أنا من سلطنة عُمان»
 // فسمعها Whisper «أنا من سلطانة أمان» فتُرجمت إلى هراء). الاقتراح يبقى بصريًا
 // بزرَّي قبول/تجاهل ولا تصحيح صامت أبدًا، والتطابق التام يأخذ الصيغة الثابتة.
+// (1.9) استثناء واحد بأمر Hilal الصريح: مدخل oman-full رُقّي إلى تصحيح
+// تلقائي (انظر pairRuleFix وfinishRecording)؛ بقية المداخل بصريّة كما هي.
 var ORIGINS = [
   { id: 'oman-full', ar: 'أنا من سلطنة عُمان', en: 'I am from the Sultanate of Oman', hi: 'मैं सल्तनत ओमान से हूँ', ur: 'میں سلطنت عمان سے ہوں' },
   { id: 'oman', ar: 'أنا من عُمان', en: 'I am from Oman', hi: 'मैं ओमान से हूँ', ur: 'میں عمان سے ہوں' },
@@ -404,13 +406,41 @@ function matchPhrase(text, lang) {
 // الآن؟» فسُمعت «أين أنت الن؟» وترجمها NLLB إلى "Where are you, Nan?".
 // المطابقة على حدود كلمة كاملة فقط (الفصل بمسافات وعلامات ترقيم) — فلا تُمسّ
 // «الن» داخل كلمات مثل الناس/النار/النوم/النتيجة أبدًا. تُرجع النص المصحَّح
-// كاملًا أو null، ويُعرض بنفس آلية الاقتراح المعلّق: لا ترجمة حتى يحسمه.
+// كاملًا أو null.
+// (1.9) بأمر Hilal الصريح: هذه القاعدة صارت تصحيحًا تلقائيًا — تُطبَّق
+// فورًا في مربع النص المسموع نفسه (ظاهرة للمستخدم قبل الترجمة) وتتابع
+// الترجمة دون انتظار قبول/تجاهل. وأُضيفت إليها في 1.9 نفسِها — بأمر ثانٍ
+// متتابع من Hilal — قاعدة الزوج «سلطانة أمان» أدناها وترقية مدخل
+// oman-full؛ بقية الاقتراحات (العبارات الضبابية وبقية مداخل الأصول)
+// تبقى معلّقة كما هي حرفيًا.
 function wordRuleFix(text, lang) {
   if (lang !== 'ar' || !text) return null;
   var parts = String(text).split(/(\s+|[؟?.,!،؛:;«»"“”'’()…\-]+)/);
   var changed = false;
   for (var i = 0; i < parts.length; i++) {
     if (parts[i] === 'الن') { parts[i] = 'الآن'; changed = true; }
+  }
+  return changed ? parts.join('') : null;
+}
+// قاعدة زوج آمنة (1.9): تسلسل الكلمتين المستقلتين «سلطانة أمان» في النص
+// العربي المسموع هو «سلطنة عُمان» شوّهها السمع — واقعة Hilal الحية الموثقة
+// منذ 1.2 (انظر ORIGINS). المطابقة على كلمتين كاملتين متتاليتين فقط —
+// فكلمة «سلطانة» وحدها كلمة حقيقية (اسم/لقب) لا تُمسّ أبدًا ما لم يتبعها
+// «أمان» مباشرة. تُرجع النص المصحَّح كاملًا أو null. التطبيق تلقائي في
+// مربع النص (انظر finishRecording) كقاعدة «الن» تمامًا.
+function pairRuleFix(text, lang) {
+  if (lang !== 'ar' || !text) return null;
+  var parts = String(text).split(/(\s+|[؟?.,!،؛:;«»"“”'’()…\-]+)/);
+  var words = []; // مواضع الكلمات فقط (غير الفارغة وغير الفاصلة) بالترتيب
+  for (var i = 0; i < parts.length; i++) {
+    if (parts[i] && !/^[\s؟?.,!،؛:;«»"“”'’()…\-]+$/.test(parts[i])) words.push(i);
+  }
+  var changed = false;
+  for (var w = 0; w + 1 < words.length; w++) {
+    var a = words[w], b = words[w + 1];
+    if (parts[a] === 'سلطانة' && parts[b] === 'أمان') {
+      parts[a] = 'سلطنة'; parts[b] = 'عُمان'; changed = true;
+    }
   }
   return changed ? parts.join('') : null;
 }
@@ -839,10 +869,9 @@ function buildPanel(key, title, defaultLang) {
     if (S.lastTranslation) speakFor(S, S.lastTranslation);
   });
   S.el.suggestYes.addEventListener('click', function () {
-    var p = S._suggested, wf = S._wordFix;
+    var p = S._suggested;
     hideSuggest(S);
     if (p) { S.el.heard.value = p[S.lang]; runTranslation(S, true); }
-    else if (wf) { S.el.heard.value = wf; runTranslation(S, true); } // قبول قاعدة الكلمة (1.5): ترجمة النص المصحَّح
   });
   S.el.suggestNo.addEventListener('click', function () {
     hideSuggest(S);
@@ -886,7 +915,7 @@ function applyPanelLang(S) {
   if (S._usedVoiceId) showUsedVoice(S, S._usedVoiceId); // سطر الصوت المستعمل بلغة المربع الجديدة
 }
 function setStatus(S, txt) { S.el.status.textContent = txt || ''; }
-function hideSuggest(S) { S.el.suggest.hidden = true; S._suggested = null; S._wordFix = null; }
+function hideSuggest(S) { S.el.suggest.hidden = true; S._suggested = null; }
 
 function toggleSpeak(S) {
   if (S.recording) { finishRecording(S); return; }
@@ -919,29 +948,42 @@ function finishRecording(S, auto) {
     S.busy = false;
     if (!text) { setStatus(S, t(S, 'noSpeech')); return; }
     S.el.heard.value = text;
-    // مطابقة ضبابية آمنة: اقتراح فقط، لا تصحيح صامت أبدًا.
+    // مطابقة ضبابية آمنة: اقتراح فقط، لا تصحيح صامت أبدًا — باستثناء
+    // القاعدتين التلقائيتين بأمر Hilal في 1.9: «الن»←«الآن» و«سلطانة أمان»
+    // ←«سلطنة عُمان» (ومدخل oman-full في فرع الاقتراح نفسه أدناه).
     // ترتيب التدفق (1.2): إن وُجد اقتراح تصحيح معلّق لا تبدأ الترجمة التلقائية
     // حتى يحسمه المستخدم (قبول = ترجمة المصحَّح، تجاهل = ترجمة النص كما سُمع) —
     // حتى لا تعبر أخطاء الأسماء والأصول إلى الترجمة كما هي. بلا اقتراح:
     // التدفق التلقائي كما كان.
     var m = matchPhrase(text, S.lang);
     if (m.phrase && m.score >= 0.8 && normalizeText(text) !== normalizeText(m.phrase[S.lang])) {
-      S._suggested = m.phrase;
-      S.el.suggestTxt.textContent = t(S, 'suggestQ').replace('{x}', m.phrase[S.lang]);
-      S.el.suggest.hidden = false;
-      setStatus(S, t(S, 'reviewSuggest'));
-    } else {
-      // قاعدة الكلمة (1.5): «الن» المستقلة ← اقتراح «الآن» بنفس الآلية المعلّقة
-      var wf = wordRuleFix(text, S.lang);
-      if (wf && wf !== text) {
-        S._wordFix = wf;
-        S.el.suggestTxt.textContent = t(S, 'suggestQ').replace('{x}', wf);
-        S.el.suggest.hidden = false;
-        setStatus(S, t(S, 'reviewSuggest'));
-      } else {
+      if (m.phrase.id === 'oman-full') {
+        // (1.9) بأمر Hilal الصريح: مدخل «سلطنة عُمان» وحده رُقّي من اقتراح
+        // معلّق إلى تصحيح تلقائي — تُكتب الصيغة الثابتة في مربع النص ظاهرة
+        // للمستخدم وتتابع الترجمة فورًا. بقية المداخل والعبارات معلّقة.
+        S.el.heard.value = m.phrase[S.lang];
         hideSuggest(S);
         runTranslation(S, true);
+      } else {
+        S._suggested = m.phrase;
+        S.el.suggestTxt.textContent = t(S, 'suggestQ').replace('{x}', m.phrase[S.lang]);
+        S.el.suggest.hidden = false;
+        setStatus(S, t(S, 'reviewSuggest'));
       }
+    } else {
+      // القواعد التلقائية (1.9، بأمرَي Hilal المتتابعين): زوج «سلطانة أمان»
+      // ← «سلطنة عُمان» (pairRuleFix) وكلمة «الن» المستقلة ← «الآن»
+      // (wordRuleFix) — تُكتب المصحَّحات في مربع النص نفسه ظاهرة للمستخدم،
+      // وتتابع الترجمة فورًا بلا انتظار قبول/تجاهل. هاتان القاعدتان (ومدخل
+      // oman-full أعلاه) وحدهما تلقائية؛ ما عداها يبقى اقتراحًا معلّقًا.
+      var af = text;
+      var pf = pairRuleFix(af, S.lang);
+      if (pf && pf !== af) af = pf;
+      var wf = wordRuleFix(af, S.lang);
+      if (wf && wf !== af) af = wf;
+      if (af !== text) { S.el.heard.value = af; }
+      hideSuggest(S);
+      runTranslation(S, true);
     }
   }).catch(function () {
     S.busy = false;
