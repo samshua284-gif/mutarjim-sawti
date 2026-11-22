@@ -437,14 +437,15 @@ function makeEngine(kind, workerFile, statusEl, timeoutMs) {
 var asrEngine = makeEngine('asr', 'asr-worker.js', document.getElementById('asrStatus'), 600000);
 var mtEngine = makeEngine('mt', 'mt-worker.js', document.getElementById('mtStatus'), 300000);
 
-/* ================= السمع الأصلي عبر الجسر (1.4، وسلسلة 1.6) =================
+/* ================= السمع الأصلي عبر الجسر (1.4، وتركيبة 1.7) =================
    المسار الأساسي: السمع عبر sherpa-onnx الأصلي في الجسر (أنوية الجهاز كلها)
    بدل عامل الويب (wasm بخيط واحد فعليًا). الصوت يُرسل PCM16 بـBase64 من
-   مسار التسجيل القائم نفسه (16kHz). سلسلة السقوط من 1.6: أذن turbo
-   (large-v3-turbo — الأقوى للعربية بقياس موثّق) ثم أذن small (1.4) داخل
-   الجسر نفسه، ثم عامل الويب القديم الذي يبقى في الحزمة كما هو عند فشل
-   الأصلي كله — بناءً أو فكًّا أو مهلة. سطر سجل في الجسر وفي وحدة التحكم
-   يوثّق أيَّ أذنٍ خدمت كل طلب، وشارة الحالة تسمّي الأذن الجاهزة فعلًا. */
+   مسار التسجيل القائم نفسه (16kHz). سلسلة السقوط كما في 1.4/1.5: أذن
+   small الأصلية داخل الجسر نفسه، ثم عامل الويب القديم الذي يبقى في
+   الحزمة كما هو عند فشل الأصلي كله — بناءً أو فكًّا أو مهلة. (أُزيلت أذن
+   1.6 التجريبية كليًا في 1.7 بحكم Hilal التجريبي على هاتفه.) سطر سجل في
+   الجسر وفي وحدة التحكم يوثّق أيَّ أذنٍ خدمت كل طلب، وشارة الحالة تسمّي
+   الأذن الجاهزة فعلًا. */
 var asrCbSeq = 0, asrCallbacks = {};
 window.__asrCallback = function (id, ok, payload) {
   var cb = asrCallbacks[id];
@@ -454,7 +455,7 @@ window.__asrCallback = function (id, ok, payload) {
 function nativeAsrReady() {
   try { return !!(window.VoiceBridge && VoiceBridge.asrNativeAvailable()); } catch (e) { return false; }
 }
-// اسم الأذن الأصلية الجاهزة فعلًا من الجسر: 'turbo' أو 'small' أو '' عند غيابها
+// اسم الأذن الأصلية الجاهزة فعلًا من الجسر: 'small' أو '' عند غيابها
 function nativeAsrKind() {
   try { return (window.VoiceBridge && VoiceBridge.asrNativeKind()) || ''; } catch (e) { return ''; }
 }
@@ -484,7 +485,7 @@ function transcribeNative(audio, lang) {
     catch (e) { clearTimeout(timer); delete asrCallbacks[id]; reject(e); }
   });
 }
-// نقطة السمع الواحدة لكل الطلبات: الأصلي أولًا (turbo ثم small داخل الجسر)،
+// نقطة السمع الواحدة لكل الطلبات: الأصلي أولًا (small داخل الجسر)،
 // والسقوط إلى عامل الويب عند فشل الأصلي كله. سطر وحدة التحكم يسمّي الأذن
 // التي خدمت الطلب فعلًا كما يردّها الجسر بعد النداء.
 function transcribeAudio(audio, S) {
@@ -521,7 +522,7 @@ asrEngine.onready = function () {
 };
 var webAsrStarted = false;
 function startWebAsr() { if (!webAsrStarted) { webAsrStarted = true; asrEngine.preload(); } }
-// شارة السمع تسمّي الأذن الأصلية الجاهزة فعلًا كما يردّها الجسر (turbo/small)
+// شارة السمع تسمّي الأذن الأصلية الجاهزة فعلًا كما يردّها الجسر (small)
 function showNativeBadge() {
   var kind = nativeAsrKind();
   if (!kind) return;
@@ -533,8 +534,8 @@ var asrPolls = 0;
 function pollNativeAsr() {
   if (nativeAsrReady()) { showNativeBadge(); mtEngine.preload(); return; }
   // بعد ~24 ثانية سخّن عامل الويب احتياطًا، لكن واصل الاستطلاع: تسخين
-  // turbo (ملفاته ~1GB تُستخرج أول مرة) قد يطول على الجهاز، ومتى جهزت
-  // الأذن الأصلية صارت هي الخادمة وسمّتها الشارة — حتى حدّ دقيقتين.
+  // الأذن الأصلية (استخراج ملفاتها أول مرة) قد يطول على الجهاز، ومتى
+  // جهزت صارت هي الخادمة وسمّتها الشارة — حتى حدّ دقيقتين.
   if (++asrPolls >= 8) startWebAsr();
   if (asrPolls < 40) setTimeout(pollNativeAsr, 3000);
 }
