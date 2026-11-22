@@ -1,11 +1,11 @@
 #!/bin/bash
-# بناء APK «المترجم الصوتي» 1.4 — دون اتصال بالكامل:
+# بناء APK «المترجم الصوتي» 1.5 — دون اتصال بالكامل:
 # سمع Whisper-small أصلي عبر sherpa-onnx (وعامل ويب Transformers.js احتياطيًا عند أي فشل)
 # + ترجمة NLLB (Transformers.js داخل WebView) + نطق Piper أصلي عبر sherpa-onnx.
 # درس إلزامي من ناسخ الكلمات: MainActivity.java يُعاد كتابته هنا داخل السكربت (heredoc) — أي تعديل عليه يكون هنا.
 set -e
 exec > >(tee -a "$HOME/workspace/voice-translator/android/build.log") 2>&1
-echo "=== VOICE TRANSLATOR BUILD (APK 1.4) START $(date) ==="
+echo "=== VOICE TRANSLATOR BUILD (APK 1.5) START $(date) ==="
 
 PROJ="$HOME/workspace/voice-translator/android"
 APP="$HOME/workspace/voice-translator/app"
@@ -18,7 +18,7 @@ AJAR="$SDK/platforms/android-34/android.jar"
 BT="$SDK/build-tools/34.0.0"
 SHERPA_JAR="$HOME/workspace/voice-translator/sherpa-aar/extracted-1.12.40/classes.jar"
 KOTLIN_JAR="$SDK/cmdline-tools/latest/lib/external/org/jetbrains/kotlin/kotlin-stdlib/1.9.0/kotlin-stdlib-1.9.0.jar"
-OUT="$HOME/workspace/voice-translator/voice-translator-1.4.apk"
+OUT="$HOME/workspace/voice-translator/voice-translator-1.5.apk"
 
 cd "$PROJ"
 mkdir -p assets/www/engines/models gen classes dex src/com/hilalsameer/voice res/values stage
@@ -65,7 +65,7 @@ cat > AndroidManifest.xml <<'EOF'
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.hilalsameer.voice"
-    android:versionCode="5" android:versionName="1.4">
+    android:versionCode="6" android:versionName="1.5">
   <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="34"/>
   <uses-permission android:name="android.permission.RECORD_AUDIO"/>
   <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS"/>
@@ -276,8 +276,16 @@ public class MainActivity extends Activity {
   }
 
   void evalTtsCallback(int id, boolean ok, String err) {
+    evalTtsCallback(id, ok, err, null);
+  }
+
+  // ردّ نداء النطق مع الصوت الذي نطق فعلًا (1.5): يمرَّر معرّف الصوت الخادم
+  // إلى الصفحة فتعرضه في سطر «الصوت المستعمل» داخل مربع الطرف صاحب الصوت —
+  // دليل من الجهاز نفسه على أي نموذج نطق العبارة، لا مجرد ما اختير في القائمة.
+  void evalTtsCallback(int id, boolean ok, String err, String voice) {
     String js = "window.__ttsCallback && window.__ttsCallback(" + id + "," + ok + ","
-        + JSONObject.quote(err == null ? "" : err) + ")";
+        + JSONObject.quote(err == null ? "" : err) + ","
+        + (voice == null ? "null" : JSONObject.quote(voice)) + ")";
     w.evaluateJavascript(js, null);
   }
 
@@ -370,7 +378,7 @@ public class MainActivity extends Activity {
       }
       final boolean fok = ok;
       final String ferr = err;
-      runOnUiThread(() -> evalTtsCallback(cbId, fok, ferr));
+      runOnUiThread(() -> evalTtsCallback(cbId, fok, ferr, voice));
     }
 
     /* ===== مسار صوت نظام الهاتف (1.3) — TextToSpeech للعربية فقط =====
@@ -481,7 +489,7 @@ public class MainActivity extends Activity {
       if (sysPendingCb != cb) return; // نداء قديم أو أُكمل بالإيقاف — تجاهل
       sysPendingCb = -1;
       final int fcb = cb;
-      runOnUiThread(() -> evalTtsCallback(fcb, ok, err));
+      runOnUiThread(() -> evalTtsCallback(fcb, ok, err, "ar-system"));
     }
 
     void shutdownSysTts() {

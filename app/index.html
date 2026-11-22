@@ -61,6 +61,7 @@
   .speak:disabled { opacity: .55; }
   @keyframes pulse { 0% { filter: brightness(1); } 50% { filter: brightness(1.3); } 100% { filter: brightness(1); } }
   .status { min-height: 20px; font-size: 13px; color: #ffd97a; margin-top: 8px; text-align: center; }
+  .voice-used { min-height: 16px; font-size: 12px; color: #9fd8a8; margin-top: 4px; text-align: center; }
   .phrases { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
   .chip {
     font-size: 12.5px; cursor: pointer; color: #ffe1a8; background: rgba(255,176,32,.12);
@@ -132,7 +133,7 @@ var LANG_ORDER = ['ar', 'en', 'hi', 'ur'];
 // g = جنس الصوت؛ العنوان الظاهر يُبنى من قاموس واجهة الطرف (1.4) بلغة الطرف نفسه.
 var VOICES = {
   ar: [ { id: 'ar_JO-kareem-medium', g: 'm' } ],
-  en: [ { id: 'en_US-lessac-medium', g: 'f' }, { id: 'en_US-ryan-medium', g: 'm' } ],
+  en: [ { id: 'en_US-amy-medium', g: 'f' }, { id: 'en_US-ryan-medium', g: 'm' } ],
   hi: [ { id: 'hi_IN-priyamvada-medium', g: 'f' }, { id: 'hi_IN-pratham-medium', g: 'm' } ],
   ur: [ { id: 'ur_PK-aegis_female-medium', g: 'f' }, { id: 'ur_PK-fasih-medium', g: 'm' } ]
 };
@@ -174,6 +175,7 @@ var UI = {
     copyTr: '📋 نسخ الترجمة', speakTr: '🔊 نطق الترجمة',
     yes: 'قبول التصحيح', no: 'تجاهل',
     voice: 'صوت: ', female: 'أنثى', male: 'ذكر', sysVoice: 'نظام الهاتف',
+    usedVoice: 'الصوت المستعمل: ',
     copied: '✓ نُسخ', suggestQ: 'هل قصدت: «{x}»؟',
     otherRecording: 'الطرف الآخر يسجّل الآن…',
     openingMic: 'جارٍ فتح الميكروفون…',
@@ -204,6 +206,7 @@ var UI = {
     copyTr: '📋 Copy translation', speakTr: '🔊 Speak translation',
     yes: 'Accept correction', no: 'Ignore',
     voice: 'Voice: ', female: 'Female', male: 'Male', sysVoice: 'Phone system',
+    usedVoice: 'Voice used: ',
     copied: '✓ Copied', suggestQ: 'Did you mean: “{x}”?',
     otherRecording: 'The other side is recording…',
     openingMic: 'Opening the microphone…',
@@ -234,6 +237,7 @@ var UI = {
     copyTr: '📋 अनुवाद कॉपी करें', speakTr: '🔊 अनुवाद बोलें',
     yes: 'सुधार स्वीकार करें', no: 'अनदेखा करें',
     voice: 'आवाज़: ', female: 'महिला', male: 'पुरुष', sysVoice: 'फ़ोन सिस्टम',
+    usedVoice: 'प्रयुक्त आवाज़: ',
     copied: '✓ कॉपी हुआ', suggestQ: 'क्या आपका मतलब था: “{x}”?',
     otherRecording: 'दूसरी ओर रिकॉर्ड कर रहा है…',
     openingMic: 'माइक्रोफ़ोन खुल रहा है…',
@@ -264,6 +268,7 @@ var UI = {
     copyTr: '📋 ترجمہ نقل کریں', speakTr: '🔊 ترجمہ بولیں',
     yes: 'تصحیح قبول کریں', no: 'نظر انداز کریں',
     voice: 'آواز: ', female: 'عورت', male: 'مرد', sysVoice: 'فون سسٹم',
+    usedVoice: 'استعمال شدہ آواز: ',
     copied: '✓ نقل ہو گیا', suggestQ: 'کیا آپ کا مطلب تھا: «{x}»؟',
     otherRecording: 'دوسری طرف ریکارڈ کر رہی ہے…',
     openingMic: 'مائیکروفون کھل رہا ہے…',
@@ -329,6 +334,21 @@ function matchPhrase(text, lang) {
     if (s > bestScore) { bestScore = s; best = p; }
   });
   return { phrase: best, score: bestScore };
+}
+// قاعدة كلمة آمنة (1.5): الرمز المستقل «الن» في النص العربي المسموع هو في
+// الغالب «الآن» شوّهها السمع — من اختبار Hilal الحي على 1.4: قال «أين أنت
+// الآن؟» فسُمعت «أين أنت الن؟» وترجمها NLLB إلى "Where are you, Nan?".
+// المطابقة على حدود كلمة كاملة فقط (الفصل بمسافات وعلامات ترقيم) — فلا تُمسّ
+// «الن» داخل كلمات مثل الناس/النار/النوم/النتيجة أبدًا. تُرجع النص المصحَّح
+// كاملًا أو null، ويُعرض بنفس آلية الاقتراح المعلّق: لا ترجمة حتى يحسمه.
+function wordRuleFix(text, lang) {
+  if (lang !== 'ar' || !text) return null;
+  var parts = String(text).split(/(\s+|[؟?.,!،؛:;«»"“”'’()…\-]+)/);
+  var changed = false;
+  for (var i = 0; i < parts.length; i++) {
+    if (parts[i] === 'الن') { parts[i] = 'الآن'; changed = true; }
+  }
+  return changed ? parts.join('') : null;
 }
 // مسار العبارات الجاهزة التلقائي (إصلاح 1.1): لا يعمل إلا على تطابق كامل للنص
 // كله مع عبارة واحدة بعد التطبيع — لا تطابق جزئي ولا «أقرب عبارة» أبدًا.
@@ -497,19 +517,35 @@ pollNativeAsr();
 
 /* ================= النطق الأصلي والنسخ عبر الجسر ================= */
 var ttsSeq = 0, ttsCallbacks = {};
-window.__ttsCallback = function (id, ok, err) {
+window.__ttsCallback = function (id, ok, err, voice) {
   var cb = ttsCallbacks[id];
   delete ttsCallbacks[id];
-  if (cb) cb(!!ok, err || '');
+  if (cb) cb(!!ok, err || '', voice || '');
 };
 var speaking = false;
 var speechGen = 0; // جيل جلسات النطق: أي إيقاف أو جلسة جديدة تُلغي الطوابير السابقة
-function speakNative(text, voiceId) {
+// إظهار الصوت الخادم (1.5): اسم قصير صادق من معرّف الصوت نفسه — يُعرض في
+// سطر «الصوت المستعمل» داخل مربع الطرف صاحب الصوت، بدليل ردّ الجسر الذي
+// يمرّر الصوت الذي نطق العبارة فعلًا لا المختار في القائمة فحسب.
+function voiceShortName(id) {
+  return id.replace(/^[a-z]{2}_[A-Z]{2}-/, '').replace(/-medium$/, '').replace(/_female$/, '');
+}
+function showUsedVoice(S, voiceId) {
+  if (!S || !voiceId) return;
+  S._usedVoiceId = voiceId;
+  var name = voiceId === 'ar-system' ? t(S, 'sysVoice') : voiceShortName(voiceId);
+  S.el.voiceUsed.textContent = t(S, 'usedVoice') + name;
+}
+function speakNative(text, voiceId, ownerSide) {
   return new Promise(function (resolve) {
     if (!window.VoiceBridge || !text) { resolve(false); return; }
     var id = ++ttsSeq;
     speaking = true;
-    ttsCallbacks[id] = function (ok) { speaking = false; resolve(ok); };
+    ttsCallbacks[id] = function (ok, err, voice) {
+      speaking = false;
+      if (ok && voice) showUsedVoice(ownerSide, voice);
+      resolve(ok);
+    };
     try { VoiceBridge.speak(text, voiceId, parseFloat(speedInput.value), id); }
     catch (e) { speaking = false; delete ttsCallbacks[id]; resolve(false); }
   });
@@ -534,7 +570,7 @@ function startSpeechSession(S) {
       return;
     }
     active = true;
-    speakNative(next, voice).then(function (ok) {
+    speakNative(next, voice, O).then(function (ok) {
       active = false;
       if (gen !== speechGen) return;
       if (!ok) { setStatus(S, t(S, 'speakFailed')); return; }
@@ -639,6 +675,7 @@ function buildPanel(key, title, defaultLang) {
   sec.innerHTML =
     '<div class="panel-head"><span class="who">' + title + '</span>' +
     '<select class="lang"></select><select class="voice"></select></div>' +
+    '<div class="voice-used"></div>' +
     '<button class="speak">🎤 تحدّث</button>' +
     '<div class="status"></div>' +
     '<div class="phrases"></div>' +
@@ -660,6 +697,7 @@ function buildPanel(key, title, defaultLang) {
       sec: sec, who: sec.querySelector('.who'),
       lang: sec.querySelector('.lang'), voice: sec.querySelector('.voice'),
       speak: sec.querySelector('.speak'), status: sec.querySelector('.status'),
+      voiceUsed: sec.querySelector('.voice-used'),
       phrases: sec.querySelector('.phrases'), heard: sec.querySelector('.heard'),
       heardLbl: sec.querySelector('.heard-lbl'), trLbl: sec.querySelector('.tr-lbl'),
       suggest: sec.querySelector('.suggest'), suggestTxt: sec.querySelector('.suggest .txt'),
@@ -703,9 +741,10 @@ function buildPanel(key, title, defaultLang) {
     if (S.lastTranslation) speakFor(S, S.lastTranslation);
   });
   S.el.suggestYes.addEventListener('click', function () {
-    var p = S._suggested;
+    var p = S._suggested, wf = S._wordFix;
     hideSuggest(S);
     if (p) { S.el.heard.value = p[S.lang]; runTranslation(S, true); }
+    else if (wf) { S.el.heard.value = wf; runTranslation(S, true); } // قبول قاعدة الكلمة (1.5): ترجمة النص المصحَّح
   });
   S.el.suggestNo.addEventListener('click', function () {
     hideSuggest(S);
@@ -745,9 +784,10 @@ function applyPanelLang(S) {
   S.el.suggestNo.textContent = t(S, 'no');
   S.el.chips.forEach(function (b, i) { b.textContent = PHRASES[i].chips[S.lang]; });
   fillVoices(S);
+  if (S._usedVoiceId) showUsedVoice(S, S._usedVoiceId); // سطر الصوت المستعمل بلغة المربع الجديدة
 }
 function setStatus(S, txt) { S.el.status.textContent = txt || ''; }
-function hideSuggest(S) { S.el.suggest.hidden = true; S._suggested = null; }
+function hideSuggest(S) { S.el.suggest.hidden = true; S._suggested = null; S._wordFix = null; }
 
 function toggleSpeak(S) {
   if (S.recording) { finishRecording(S); return; }
@@ -791,8 +831,17 @@ function finishRecording(S, auto) {
       S.el.suggest.hidden = false;
       setStatus(S, t(S, 'reviewSuggest'));
     } else {
-      hideSuggest(S);
-      runTranslation(S, true);
+      // قاعدة الكلمة (1.5): «الن» المستقلة ← اقتراح «الآن» بنفس الآلية المعلّقة
+      var wf = wordRuleFix(text, S.lang);
+      if (wf && wf !== text) {
+        S._wordFix = wf;
+        S.el.suggestTxt.textContent = t(S, 'suggestQ').replace('{x}', wf);
+        S.el.suggest.hidden = false;
+        setStatus(S, t(S, 'reviewSuggest'));
+      } else {
+        hideSuggest(S);
+        runTranslation(S, true);
+      }
     }
   }).catch(function () {
     S.busy = false;

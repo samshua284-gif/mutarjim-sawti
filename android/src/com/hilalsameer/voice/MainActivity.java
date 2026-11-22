@@ -160,8 +160,16 @@ public class MainActivity extends Activity {
   }
 
   void evalTtsCallback(int id, boolean ok, String err) {
+    evalTtsCallback(id, ok, err, null);
+  }
+
+  // ردّ نداء النطق مع الصوت الذي نطق فعلًا (1.5): يمرَّر معرّف الصوت الخادم
+  // إلى الصفحة فتعرضه في سطر «الصوت المستعمل» داخل مربع الطرف صاحب الصوت —
+  // دليل من الجهاز نفسه على أي نموذج نطق العبارة، لا مجرد ما اختير في القائمة.
+  void evalTtsCallback(int id, boolean ok, String err, String voice) {
     String js = "window.__ttsCallback && window.__ttsCallback(" + id + "," + ok + ","
-        + JSONObject.quote(err == null ? "" : err) + ")";
+        + JSONObject.quote(err == null ? "" : err) + ","
+        + (voice == null ? "null" : JSONObject.quote(voice)) + ")";
     w.evaluateJavascript(js, null);
   }
 
@@ -254,7 +262,7 @@ public class MainActivity extends Activity {
       }
       final boolean fok = ok;
       final String ferr = err;
-      runOnUiThread(() -> evalTtsCallback(cbId, fok, ferr));
+      runOnUiThread(() -> evalTtsCallback(cbId, fok, ferr, voice));
     }
 
     /* ===== مسار صوت نظام الهاتف (1.3) — TextToSpeech للعربية فقط =====
@@ -365,7 +373,7 @@ public class MainActivity extends Activity {
       if (sysPendingCb != cb) return; // نداء قديم أو أُكمل بالإيقاف — تجاهل
       sysPendingCb = -1;
       final int fcb = cb;
-      runOnUiThread(() -> evalTtsCallback(fcb, ok, err));
+      runOnUiThread(() -> evalTtsCallback(fcb, ok, err, "ar-system"));
     }
 
     void shutdownSysTts() {
