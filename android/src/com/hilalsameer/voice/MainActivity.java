@@ -10,6 +10,7 @@ import android.media.AudioFormat;
 import android.media.AudioTrack;
 import android.net.Uri;
 import android.os.Bundle;
+import android.util.Base64;
 import android.util.Log;
 import android.webkit.ConsoleMessage;
 import android.webkit.JavascriptInterface;
@@ -24,8 +25,14 @@ import android.widget.Toast;
 import android.speech.tts.TextToSpeech;
 import android.speech.tts.UtteranceProgressListener;
 import android.speech.tts.Voice;
+import com.k2fsa.sherpa.onnx.FeatureConfig;
 import com.k2fsa.sherpa.onnx.GeneratedAudio;
+import com.k2fsa.sherpa.onnx.OfflineModelConfig;
+import com.k2fsa.sherpa.onnx.OfflineRecognizer;
+import com.k2fsa.sherpa.onnx.OfflineRecognizerConfig;
+import com.k2fsa.sherpa.onnx.OfflineStream;
 import com.k2fsa.sherpa.onnx.OfflineTts;
+import com.k2fsa.sherpa.onnx.OfflineWhisperModelConfig;
 import com.k2fsa.sherpa.onnx.OfflineTtsConfig;
 import com.k2fsa.sherpa.onnx.OfflineTtsModelConfig;
 import com.k2fsa.sherpa.onnx.OfflineTtsVitsModelConfig;
@@ -133,6 +140,11 @@ public class MainActivity extends Activity {
     // تهيئة صوت نظام الهاتف (مسار نطق ثانٍ للعربية فقط، 1.3): يفحص الجسر توفر
     // صوت عربي فعلي على الجهاز ويُعلم الصفحة عند الجاهزية.
     bridge.ensureSysTts();
+    // تسخين السمع الأصلي في الخلفية (1.4): استخراج ملفات Whisper بصيغة sherpa
+    // وبناء المعرّف، كي يكون المسار الأصلي جاهزًا عند أول تسجيل.
+    new Thread(() -> {
+      try { bridge.warmAsr(); } catch (Throwable ignored) {}
+    }).start();
   }
 
   @Override public void onRequestPermissionsResult(int req, String[] perms, int[] results) {
@@ -150,6 +162,14 @@ public class MainActivity extends Activity {
   void evalTtsCallback(int id, boolean ok, String err) {
     String js = "window.__ttsCallback && window.__ttsCallback(" + id + "," + ok + ","
         + JSONObject.quote(err == null ? "" : err) + ")";
+    w.evaluateJavascript(js, null);
+  }
+
+  // ردّ نداء السمع الأصلي (1.4): الحمولة هي النص المتعرّف عليه عند النجاح
+  // أو رسالة الخطأ عند الفشل (عندها تسقط الصفحة إلى عامل الويب تلقائيًا).
+  void evalAsrCallback(int id, boolean ok, String payload) {
+    String js = "window.__asrCallback && window.__asrCallback(" + id + "," + ok + ","
+        + JSONObject.quote(payload == null ? "" : payload) + ")";
     w.evaluateJavascript(js, null);
   }
 
@@ -175,6 +195,15 @@ public class MainActivity extends Activity {
     private volatile int sysArState = -1; // ‎-1 لم يُعرف بعد، 0 لا يوجد، 1 يوجد صوت عربي فعلي
     private volatile Voice sysArVoice;
     private volatile int sysPendingCb = -1;
+    // السمع الأصلي (1.4): OfflineRecognizer بـWhisper-small بصيغة sherpa (int8)
+    // — نفس النموذج، بلا عامل ويب. اللغة تُفرض لكل طلب عبر setConfig (يقرأها
+    // فكّاك whisper من إعداداته عند كل فكّ ويعيد كتابة رمز اللغة الابتدائي)،
+    // فلا إعادة بناء للجلسات عند تبديل اللغات.
+    private OfflineRecognizer asr;
+    private File asrEnc, asrDec, asrTokens;
+    private String asrLang; // لغة الإعداد الحالي للمعرّف
+    private final Object asrLock = new Object();
+    private volatile int asrState = 0; // 0 لم يُبنَ بعد، 1 جاهز، ‎-1 فشل نهائي (الصفحة تستخدم عامل الويب وحده)
 
     @JavascriptInterface public void copyText(final String text) {
       runOnUiThread(() -> {
@@ -344,6 +373,141 @@ public class MainActivity extends Activity {
         try { sysTts.stop(); sysTts.shutdown(); } catch (Throwable ignored) {}
         sysTts = null;
       }
+    }
+
+    /* ===== السمع الأصلي (1.4) — Whisper-small عبر sherpa-onnx =====
+       المسار الأساسي للسمع من 1.4: الصفحة ترسل PCM 16kHz (PCM16 بـBase64)
+       من مسار التسجيل القائم نفسه، فيتعرّف عليه المعرّف الأصلي هنا.
+       أي فشل (استخراج/بناء/فكّ) يردّ خطأً للصفحة فتسقط تلقائيًا إلى عامل
+       الويب القديم الذي يبقى في الحزمة كما هو — لا تعطّل كامل أبدًا. */
+
+    // تسخين عند إقلاع التطبيق (خيط خلفي من onCreate): استخراج + بناء.
+    void warmAsr() {
+      synchronized (asrLock) {
+        try { ensureAsrLocked(); }
+        catch (Throwable e) { Log.e(TAG, "asr warm failed", e); }
+      }
+    }
+
+    // للصفحة: هل المسار الأصلي جاهز؟ (تُفضّله الصفحة وتسقط للويب عند غيابه)
+    @JavascriptInterface public boolean asrNativeAvailable() {
+      return asrState == 1;
+    }
+
+    // تعرّف أصلي: يعمل على خيط الجسر ويحظر حتى الاكتمال (نمط speak نفسه)،
+    // ثم يردّ النداء للصفحة بالنص أو بالخطأ. سطر السجل يوثّق المسار الخادم.
+    @JavascriptInterface public void transcribeNative(final String b64, final String lang, final int cbId) {
+      boolean ok = false;
+      String payload = "";
+      long t0 = System.currentTimeMillis();
+      int sampleCount = 0;
+      try {
+        byte[] pcm = Base64.decode(b64, Base64.DEFAULT);
+        float[] samples = new float[pcm.length / 2];
+        for (int i = 0; i < samples.length; i++) {
+          int v = (pcm[2 * i] & 0xff) | (pcm[2 * i + 1] << 8);
+          samples[i] = ((short) v) / 32768f;
+        }
+        sampleCount = samples.length;
+        synchronized (asrLock) {
+          ensureAsrLocked();
+          setAsrLanguageLocked(lang);
+          payload = decodeChunkedLocked(samples);
+        }
+        ok = true;
+      } catch (Throwable e) {
+        payload = String.valueOf(e);
+        Log.e(TAG, "asr native failed", e instanceof Exception ? (Exception) e : new Exception(e));
+      }
+      Log.i(TAG, "asr path=native lang=" + lang + " ok=" + ok + " samples=" + sampleCount
+          + " ms=" + (System.currentTimeMillis() - t0));
+      final boolean fok = ok;
+      final String fpayload = payload;
+      runOnUiThread(() -> evalAsrCallback(cbId, fok, fpayload));
+    }
+
+    // بناء المعرّف عند الحاجة (داخل asrLock): استخراج موثّق بالحجم إلى جذر
+    // جديد asr/v14 ثم بناء الجلسات بلغة ابتدائية (العربية — لغة الطرف أ).
+    private void ensureAsrLocked() throws Exception {
+      if (asr != null) return;
+      if (asrState == -1) throw new Exception("native asr unavailable (earlier failure)");
+      File dir = new File(new File(getFilesDir(), "asr"), "v14/whisper-small");
+      if (!dir.isDirectory()) dir.mkdirs();
+      asrEnc = new File(dir, "small-encoder.int8.onnx");
+      asrDec = new File(dir, "small-decoder.int8.onnx");
+      asrTokens = new File(dir, "small-tokens.txt");
+      try {
+        extractVerified("asr/whisper-small/small-encoder.int8.onnx", asrEnc);
+        extractVerified("asr/whisper-small/small-decoder.int8.onnx", asrDec);
+        extractVerified("asr/whisper-small/small-tokens.txt", asrTokens);
+        asr = new OfflineRecognizer(null, buildAsrConfig("ar"));
+      } catch (Throwable e) {
+        asrState = -1; // فشل نهائي: لا تُفضّل الصفحة هذا المسار بعد الآن
+        throw e instanceof Exception ? (Exception) e : new Exception(e);
+      }
+      asrLang = "ar";
+      asrState = 1;
+      Log.i(TAG, "asr native built enc=" + asrEnc.length() + " dec=" + asrDec.length());
+    }
+
+    private OfflineRecognizerConfig buildAsrConfig(String lang) {
+      OfflineWhisperModelConfig wcfg = new OfflineWhisperModelConfig();
+      wcfg.setEncoder(asrEnc.getAbsolutePath());
+      wcfg.setDecoder(asrDec.getAbsolutePath());
+      wcfg.setLanguage(lang);
+      wcfg.setTask("transcribe");
+      OfflineModelConfig mcfg = new OfflineModelConfig();
+      mcfg.setWhisper(wcfg);
+      mcfg.setTokens(asrTokens.getAbsolutePath());
+      mcfg.setNumThreads(4);
+      mcfg.setDebug(false);
+      mcfg.setProvider("cpu");
+      FeatureConfig fcfg = new FeatureConfig();
+      fcfg.setSampleRate(16000);
+      fcfg.setFeatureDim(80);
+      OfflineRecognizerConfig rcfg = new OfflineRecognizerConfig();
+      rcfg.setFeatConfig(fcfg);
+      rcfg.setModelConfig(mcfg);
+      rcfg.setDecodingMethod("greedy_search");
+      return rcfg;
+    }
+
+    // فرض لغة الطلب (داخل asrLock): setConfig تُحدّث إعداد whisper داخل
+    // المحرك، وفكّاكه يقرأ اللغة من إعداداته عند كل فكّ — فلا إعادة بناء.
+    private void setAsrLanguageLocked(String lang) {
+      if (lang == null || lang.equals(asrLang)) return;
+      asr.setConfig(buildAsrConfig(lang));
+      asrLang = lang;
+      Log.i(TAG, "asr language set to " + lang);
+    }
+
+    // فكّ الصوت (داخل asrLock). حدّ محرك whisper في sherpa: أول ~29.5 ثانية
+    // فقط من أي دفقة واحدة — فنقطع التسجيل (سقفه 45 ثانية أصلًا) إلى قطع
+    // 25 ثانية متتالية ونفكّ كلًّا وحدها ثم نصل النصوص.
+    private String decodeChunkedLocked(float[] samples) throws Exception {
+      final int CHUNK = 25 * 16000;
+      StringBuilder out = new StringBuilder();
+      for (int off = 0; off < samples.length; off += CHUNK) {
+        int n = Math.min(CHUNK, samples.length - off);
+        float[] part = new float[n];
+        System.arraycopy(samples, off, part, 0, n);
+        OfflineStream stream = asr.createStream();
+        try {
+          stream.acceptWaveform(part, 16000);
+          asr.decode(stream);
+          String text = asr.getResult(stream).getText();
+          if (text != null) {
+            text = text.trim();
+            if (!text.isEmpty()) {
+              if (out.length() > 0) out.append(' ');
+              out.append(text);
+            }
+          }
+        } finally {
+          try { stream.release(); } catch (Throwable ignored) {}
+        }
+      }
+      return out.toString();
     }
 
     private void playSamples(float[] samples, int sr) throws Exception {

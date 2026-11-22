@@ -40,6 +40,8 @@
     border-radius: 20px; padding: 14px; backdrop-filter: blur(10px);
     box-shadow: 0 10px 30px rgba(0,0,0,.35);
   }
+  /* خط النستعليق للأردية حيث يوفره الجهاز (1.4) */
+  .panel[data-lang="ur"] { font-family: "Noto Nastaliq Urdu", "Segoe UI", Tahoma, Arial, sans-serif; }
   .panel-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   .who {
     font-weight: 800; font-size: 15px; color: #0b1020; background: #ffb020;
@@ -126,19 +128,20 @@ var LANGS = {
   ur: { name: 'اردو — الأردية', whisper: 'urdu', nllb: 'urd_Arab' }
 };
 var LANG_ORDER = ['ar', 'en', 'hi', 'ur'];
-// الأصوات المتاحة فعليًا داخل التطبيق لكل لغة (من حزمة Piper المُثبتة) — لا يُعرض صوت غير موجود
+// الأصوات المتاحة فعليًا داخل التطبيق لكل لغة (من حزمة Piper المُثبتة) — لا يُعرض صوت غير موجود.
+// g = جنس الصوت؛ العنوان الظاهر يُبنى من قاموس واجهة الطرف (1.4) بلغة الطرف نفسه.
 var VOICES = {
-  ar: [ { id: 'ar_JO-kareem-medium', label: 'ذكر' } ],
-  en: [ { id: 'en_US-lessac-medium', label: 'أنثى' }, { id: 'en_US-ryan-medium', label: 'ذكر' } ],
-  hi: [ { id: 'hi_IN-priyamvada-medium', label: 'أنثى' }, { id: 'hi_IN-pratham-medium', label: 'ذكر' } ],
-  ur: [ { id: 'ur_PK-aegis_female-medium', label: 'أنثى' }, { id: 'ur_PK-fasih-medium', label: 'ذكر' } ]
+  ar: [ { id: 'ar_JO-kareem-medium', g: 'm' } ],
+  en: [ { id: 'en_US-lessac-medium', g: 'f' }, { id: 'en_US-ryan-medium', g: 'm' } ],
+  hi: [ { id: 'hi_IN-priyamvada-medium', g: 'f' }, { id: 'hi_IN-pratham-medium', g: 'm' } ],
+  ur: [ { id: 'ur_PK-aegis_female-medium', g: 'f' }, { id: 'ur_PK-fasih-medium', g: 'm' } ]
 };
 // عبارات جاهزة: نص ثابت لكل لغة — إن تطابق النص المسموع مع عبارة، تُستخدم صيغتها الثابتة
 // في اللغة الأخرى مباشرة دون المرور بنموذج الترجمة (تحية الأردية خصوصًا لا تُهلوس أبدًا)
 var PHRASES = [
-  { id: 'greeting', chip: '👋 تحية', ar: 'السلام عليكم، كيف حالك؟', en: 'Hello, how are you?', hi: 'नमस्ते, आप कैसे हैं?', ur: 'السلام علیکم، آپ کیسے ہیں؟' },
-  { id: 'thanks', chip: '🙏 شكرًا', ar: 'شكرًا جزيلًا', en: 'Thank you very much', hi: 'बहुत धन्यवाद', ur: 'بہت شکریہ' },
-  { id: 'price', chip: '💰 كم السعر؟', ar: 'كم سعر هذا؟', en: 'How much does this cost?', hi: 'इसकी कीमत कितनी है?', ur: 'اس کی قیمت کتنی ہے؟' }
+  { id: 'greeting', chips: { ar: '👋 تحية', en: '👋 Greeting', hi: '👋 अभिवादन', ur: '👋 سلام' }, ar: 'السلام عليكم، كيف حالك؟', en: 'Hello, how are you?', hi: 'नमस्ते, आप कैसे हैं?', ur: 'السلام علیکم، آپ کیسے ہیں؟' },
+  { id: 'thanks', chips: { ar: '🙏 شكرًا', en: '🙏 Thanks', hi: '🙏 धन्यवाद', ur: '🙏 شکریہ' }, ar: 'شكرًا جزيلًا', en: 'Thank you very much', hi: 'बहुत धन्यवाद', ur: 'بہت شکریہ' },
+  { id: 'price', chips: { ar: '💰 كم السعر؟', en: '💰 Price?', hi: '💰 कीमत?', ur: '💰 قیمت؟' }, ar: 'كم سعر هذا؟', en: 'How much does this cost?', hi: 'इसकी कीमत कितनी है?', ur: 'اس کی قیمت کتنی ہے؟' }
 ];
 // عبارات تعريف وأصول شائعة (1.2): ليست أزرارًا في الواجهة — تدخل قاموس المطابقة
 // فقط شبكةَ أمانٍ لأخطاء السمع في الأسماء والأصول (قال «أنا من سلطنة عُمان»
@@ -154,6 +157,141 @@ var ORIGINS = [
 ];
 // قاموس المطابقة الكامل: عبارات الأزرار + عبارات الأصول (للاقتراح والتطابق التام فقط)
 var MATCHBOOK = PHRASES.concat(ORIGINS);
+
+/* ================= قاموس واجهة الطرف (1.4) =================
+   كل سلسلة ظاهرة داخل مربع الطرف — التسميات والأزرار والرقائق وسطور الحالة
+   الرئيسة — بأربع لغات مكتوبة يدويًا هنا (لا ترجمة آلية لنصوص الواجهة).
+   كل مربع يُعرض بلغة طرفه المحددة ويتبدّل فور تغييرها (applyPanelLang)،
+   فيقرأ الطرف الآخر جهته بلغته. بقية الواجهة المشتركة (الترويسة والخاتمة)
+   تبقى بالعربية. المفاتيح نفسها في اللغات الأربع — يُتحقق منها ساكنًا. */
+var UI = {
+  ar: {
+    whoA: 'الطرف أ', whoB: 'الطرف ب',
+    speak: '🎤 تحدّث', stopSpeak: '⏹ إيقاف وترجمة',
+    heardLbl: 'ما سُمع (أو اكتبه بنفسك — وضع الكتابة):',
+    copyHeard: '📋 نسخ النص', translate: '🔁 ترجم ونطق',
+    trLbl: 'الترجمة بلغة الطرف الآخر:',
+    copyTr: '📋 نسخ الترجمة', speakTr: '🔊 نطق الترجمة',
+    yes: 'قبول التصحيح', no: 'تجاهل',
+    voice: 'صوت: ', female: 'أنثى', male: 'ذكر', sysVoice: 'نظام الهاتف',
+    copied: '✓ نُسخ', suggestQ: 'هل قصدت: «{x}»؟',
+    otherRecording: 'الطرف الآخر يسجّل الآن…',
+    openingMic: 'جارٍ فتح الميكروفون…',
+    listening: '🎙️ أسمعك… تحدّث الآن — يتوقف تلقائيًا عند صمت 3 ثوانٍ، أو اضغط إيقاف',
+    micDenied: 'تعذّر فتح الميكروفون — امنح الإذن من إعدادات التطبيق',
+    noAudio: 'لم يُلتقط صوت',
+    convertingAuto: '⏹ إيقاف تلقائي (صمت 3 ثوانٍ) — جارٍ تحويل كلامك إلى نص… (قد يطول أول مرة)',
+    converting: 'جارٍ تحويل كلامك إلى نص… (قد يطول أول مرة)',
+    noSpeech: 'لم أميّز كلامًا واضحًا — قرّب الهاتف وجرّب بجملة قصيرة',
+    reviewSuggest: '❓ راجع التصحيح المقترح — الترجمة بانتظار قبولك أو تجاهلك',
+    asrFailed: 'تعذّر السمع — أعد المحاولة',
+    noText: 'لا نص بعد — تحدّث أو اكتب أولًا',
+    translating: 'جارٍ الترجمة…',
+    progressSpeak: 'تُرجمت {a} من {b} — النطق يتدفق…',
+    progressPlain: 'تُرجمت {a} من {b}…',
+    translatedSpeak: 'تمت الترجمة — جارٍ النطق…',
+    translated: 'تمت الترجمة',
+    translatedSpoken: 'تمت الترجمة والنطق ✓',
+    speakFailed: 'تعذّر النطق',
+    mtFailed: 'تعذّرت الترجمة — أعد المحاولة'
+  },
+  en: {
+    whoA: 'Side A', whoB: 'Side B',
+    speak: '🎤 Speak', stopSpeak: '⏹ Stop & translate',
+    heardLbl: 'What was heard (or type it yourself):',
+    copyHeard: '📋 Copy text', translate: '🔁 Translate & speak',
+    trLbl: "Translation in the other side's language:",
+    copyTr: '📋 Copy translation', speakTr: '🔊 Speak translation',
+    yes: 'Accept correction', no: 'Ignore',
+    voice: 'Voice: ', female: 'Female', male: 'Male', sysVoice: 'Phone system',
+    copied: '✓ Copied', suggestQ: 'Did you mean: “{x}”?',
+    otherRecording: 'The other side is recording…',
+    openingMic: 'Opening the microphone…',
+    listening: '🎙️ Listening… speak now — stops automatically after 3s of silence, or press Stop',
+    micDenied: 'Could not open the microphone — grant permission in app settings',
+    noAudio: 'No audio was captured',
+    convertingAuto: '⏹ Auto-stop (3s silence) — turning your speech into text… (first time may take longer)',
+    converting: 'Turning your speech into text… (first time may take longer)',
+    noSpeech: 'No clear speech recognized — bring the phone closer and try a short sentence',
+    reviewSuggest: '❓ Review the suggested correction — translation waits for your accept or ignore',
+    asrFailed: 'Listening failed — try again',
+    noText: 'No text yet — speak or type first',
+    translating: 'Translating…',
+    progressSpeak: 'Translated {a} of {b} — speech is streaming…',
+    progressPlain: 'Translated {a} of {b}…',
+    translatedSpeak: 'Translated — speaking…',
+    translated: 'Translated',
+    translatedSpoken: 'Translation and speech done ✓',
+    speakFailed: 'Speech failed',
+    mtFailed: 'Translation failed — try again'
+  },
+  hi: {
+    whoA: 'पक्ष A', whoB: 'पक्ष B',
+    speak: '🎤 बोलें', stopSpeak: '⏹ रुकें और अनुवाद करें',
+    heardLbl: 'जो सुना गया (या खुद लिखें):',
+    copyHeard: '📋 पाठ कॉपी करें', translate: '🔁 अनुवाद करें और बोलें',
+    trLbl: 'दूसरी ओर की भाषा में अनुवाद:',
+    copyTr: '📋 अनुवाद कॉपी करें', speakTr: '🔊 अनुवाद बोलें',
+    yes: 'सुधार स्वीकार करें', no: 'अनदेखा करें',
+    voice: 'आवाज़: ', female: 'महिला', male: 'पुरुष', sysVoice: 'फ़ोन सिस्टम',
+    copied: '✓ कॉपी हुआ', suggestQ: 'क्या आपका मतलब था: “{x}”?',
+    otherRecording: 'दूसरी ओर रिकॉर्ड कर रहा है…',
+    openingMic: 'माइक्रोफ़ोन खुल रहा है…',
+    listening: '🎙️ सुन रहा हूँ… अब बोलें — 3 सेकंड की चुप्पी पर अपने आप रुक जाएगा, या रुकें दबाएँ',
+    micDenied: 'माइक्रोफ़ोन नहीं खुला — ऐप सेटिंग में अनुमति दें',
+    noAudio: 'कोई आवाज़ रिकॉर्ड नहीं हुई',
+    convertingAuto: '⏹ अपने आप रुका (3 सेकंड चुप्पी) — आपकी आवाज़ को पाठ में बदल रहा हूँ… (पहली बार अधिक समय लग सकता है)',
+    converting: 'आपकी आवाज़ को पाठ में बदल रहा हूँ… (पहली बार अधिक समय लग सकता है)',
+    noSpeech: 'स्पष्ट आवाज़ नहीं पहचानी — फ़ोन पास लाएँ और छोटा वाक्य बोलें',
+    reviewSuggest: '❓ सुझाया गया सुधार देखें — अनुवाद आपकी स्वीकृति या अनदेखी की प्रतीक्षा में है',
+    asrFailed: 'सुनना विफल — फिर कोशिश करें',
+    noText: 'अभी कोई पाठ नहीं — पहले बोलें या लिखें',
+    translating: 'अनुवाद हो रहा है…',
+    progressSpeak: '{b} में से {a} अनुवादित — उच्चारण बह रहा है…',
+    progressPlain: '{b} में से {a} अनुवादित…',
+    translatedSpeak: 'अनुवाद हुआ — बोला जा रहा है…',
+    translated: 'अनुवाद हुआ',
+    translatedSpoken: 'अनुवाद और उच्चारण पूर्ण ✓',
+    speakFailed: 'उच्चारण विफल',
+    mtFailed: 'अनुवाद विफल — फिर कोशिश करें'
+  },
+  ur: {
+    whoA: 'طرف A', whoB: 'طرف B',
+    speak: '🎤 بولیں', stopSpeak: '⏹ رکیں اور ترجمہ کریں',
+    heardLbl: 'جو سنا گیا (یا خود لکھیں):',
+    copyHeard: '📋 متن نقل کریں', translate: '🔁 ترجمہ کریں اور بولیں',
+    trLbl: 'دوسری طرف کی زبان میں ترجمہ:',
+    copyTr: '📋 ترجمہ نقل کریں', speakTr: '🔊 ترجمہ بولیں',
+    yes: 'تصحیح قبول کریں', no: 'نظر انداز کریں',
+    voice: 'آواز: ', female: 'عورت', male: 'مرد', sysVoice: 'فون سسٹم',
+    copied: '✓ نقل ہو گیا', suggestQ: 'کیا آپ کا مطلب تھا: «{x}»؟',
+    otherRecording: 'دوسری طرف ریکارڈ کر رہی ہے…',
+    openingMic: 'مائیکروفون کھل رہا ہے…',
+    listening: '🎙️ سن رہا ہوں… اب بولیں — 3 سیکنڈ خاموشی پر خود رک جائے گا، یا رکیں دبائیں',
+    micDenied: 'مائیکروفون نہ کھل سکا — ایپ کی ترتیبات سے اجازت دیں',
+    noAudio: 'کوئی آواز ریکارڈ نہیں ہوئی',
+    convertingAuto: '⏹ خودکار روک (3 سیکنڈ خاموشی) — آپ کی آواز کو متن میں بدل رہا ہوں… (پہلی بار زیادہ وقت لگ سکتا ہے)',
+    converting: 'آپ کی آواز کو متن میں بدل رہا ہوں… (پہلی بار زیادہ وقت لگ سکتا ہے)',
+    noSpeech: 'واضح آواز نہ پہچانی — فون قریب لائیں اور چھوٹا جملہ بولیں',
+    reviewSuggest: '❓ تجویز کردہ تصحیح دیکھیں — ترجمہ آپ کی قبولیت یا نظر اندازی کا منتظر ہے',
+    asrFailed: 'سننا ناکام — دوبارہ کوشش کریں',
+    noText: 'ابھی کوئی متن نہیں — پہلے بولیں یا لکھیں',
+    translating: 'ترجمہ ہو رہا ہے…',
+    progressSpeak: '{b} میں سے {a} ترجمہ ہو گئے — تلفظ جاری ہے…',
+    progressPlain: '{b} میں سے {a} ترجمہ ہو گئے…',
+    translatedSpeak: 'ترجمہ ہو گیا — بولا جا رہا ہے…',
+    translated: 'ترجمہ ہو گیا',
+    translatedSpoken: 'ترجمہ اور تلفظ مکمل ✓',
+    speakFailed: 'تلفظ ناکام',
+    mtFailed: 'ترجمہ ناکام — دوبارہ کوشش کریں'
+  }
+};
+// سلسلة واجهة الطرف S بلغته هو — سقوط آمن إلى العربية ثم إلى المفتاح نفسه
+function t(S, key) {
+  var d = UI[S.lang] || UI.ar;
+  if (d[key] !== undefined) return d[key];
+  return UI.ar[key] !== undefined ? UI.ar[key] : key;
+}
 
 /* ================= أدوات نصية: تطبيع ومطابقة ضبابية آمنة ================= */
 function normalizeText(s) {
@@ -278,9 +416,84 @@ function makeEngine(kind, workerFile, statusEl, timeoutMs) {
 }
 var asrEngine = makeEngine('asr', 'asr-worker.js', document.getElementById('asrStatus'), 600000);
 var mtEngine = makeEngine('mt', 'mt-worker.js', document.getElementById('mtStatus'), 300000);
-// تحميل متسلسل: السمع أولًا ثم الترجمة (حماية لذاكرة الهاتف)
+
+/* ================= السمع الأصلي عبر الجسر (1.4) =================
+   المسار الأساسي: Whisper-small نفسه لكن عبر sherpa-onnx الأصلي في الجسر
+   (أنوية الجهاز كلها) بدل عامل الويب (wasm بخيط واحد فعليًا). الصوت يُرسل
+   PCM16 بـBase64 من مسار التسجيل القائم نفسه (16kHz). أي فشل في المسار
+   الأصلي — بناءً أو فكًّا أو مهلة — يسقط تلقائيًا إلى عامل الويب القديم
+   الذي يبقى في الحزمة كما هو. سطر سجل في الجسر وفي وحدة التحكم يوثّق
+   أيَّ مسارٍ خدم كل طلب. */
+var asrCbSeq = 0, asrCallbacks = {};
+window.__asrCallback = function (id, ok, payload) {
+  var cb = asrCallbacks[id];
+  delete asrCallbacks[id];
+  if (cb) cb(!!ok, payload || '');
+};
+function nativeAsrReady() {
+  try { return !!(window.VoiceBridge && VoiceBridge.asrNativeAvailable()); } catch (e) { return false; }
+}
+function pcm16Base64(floats) {
+  var bytes = new Uint8Array(floats.length * 2);
+  for (var i = 0; i < floats.length; i++) {
+    var v = Math.max(-1, Math.min(1, floats[i]));
+    var s = v < 0 ? Math.round(v * 32768) : Math.round(v * 32767);
+    bytes[2 * i] = s & 255; bytes[2 * i + 1] = (s >> 8) & 255;
+  }
+  var bin = '', CH = 32768;
+  for (var j = 0; j < bytes.length; j += CH)
+    bin += String.fromCharCode.apply(null, bytes.subarray(j, j + CH));
+  return btoa(bin);
+}
+function transcribeNative(audio, lang) {
+  return new Promise(function (resolve, reject) {
+    var id = ++asrCbSeq;
+    var timer = setTimeout(function () {
+      if (asrCallbacks[id]) { delete asrCallbacks[id]; reject(new Error('native timeout')); }
+    }, 240000);
+    asrCallbacks[id] = function (ok, payload) {
+      clearTimeout(timer);
+      if (ok) resolve(payload); else reject(new Error(payload || 'native asr'));
+    };
+    try { VoiceBridge.transcribeNative(pcm16Base64(audio), lang, id); }
+    catch (e) { clearTimeout(timer); delete asrCallbacks[id]; reject(e); }
+  });
+}
+// نقطة السمع الواحدة لكل الطلبات: الأصلي أولًا، والسقوط إلى عامل الويب عند أي فشل
+function transcribeAudio(audio, S) {
+  if (nativeAsrReady()) {
+    return transcribeNative(audio, S.lang).then(function (text) {
+      console.log('asr path=native lang=' + S.lang);
+      return text;
+    }, function (err) {
+      console.log('asr path=web-worker (fallback after native failure: ' + (err && err.message) + ')');
+      return asrEngine.request({ type: 'asr', audio: audio, whisperLang: LANGS[S.lang].whisper });
+    });
+  }
+  console.log('asr path=web-worker (native unavailable)');
+  return asrEngine.request({ type: 'asr', audio: audio, whisperLang: LANGS[S.lang].whisper });
+}
+
+// إقلاع المحركات: إن كان السمع الأصلي جاهزًا لا نحمّل عامل سمع الويب أصلًا
+// (ذاكرة ووقت) ونحمّل الترجمة مباشرة. بناء المعرّف الأصلي يجري في خيط
+// خلفي عند إقلاع التطبيق، فنستطلع الجسر على فترات؛ فإن تأخر كثيرًا سخّنّا
+// عامل الويب احتياطًا (يبقى السمع الأصلي مفضّلًا متى جهز).
 asrEngine.onready = function () { mtEngine.preload(); };
-asrEngine.preload();
+var webAsrStarted = false;
+function startWebAsr() { if (!webAsrStarted) { webAsrStarted = true; asrEngine.preload(); } }
+var asrPolls = 0;
+function pollNativeAsr() {
+  if (nativeAsrReady()) {
+    var el = document.getElementById('asrStatus');
+    el.textContent = 'السمع: جاهز (أصلي داخل الجهاز)';
+    el.className = 'eng ok';
+    mtEngine.preload();
+    return;
+  }
+  if (++asrPolls >= 8) { startWebAsr(); return; }
+  setTimeout(pollNativeAsr, 3000);
+}
+pollNativeAsr();
 
 /* ================= النطق الأصلي والنسخ عبر الجسر ================= */
 var ttsSeq = 0, ttsCallbacks = {};
@@ -317,31 +530,32 @@ function startSpeechSession(S) {
     if (gen !== speechGen || active) return;
     var next = queue.shift();
     if (next === undefined) {
-      if (finished) setStatus(S, 'تمت الترجمة والنطق ✓');
+      if (finished) setStatus(S, t(S, 'translatedSpoken'));
       return;
     }
     active = true;
     speakNative(next, voice).then(function (ok) {
       active = false;
       if (gen !== speechGen) return;
-      if (!ok) { setStatus(S, 'تعذّر النطق'); return; }
+      if (!ok) { setStatus(S, t(S, 'speakFailed')); return; }
       pump();
     });
   }
   return {
-    push: function (t) { if (gen === speechGen && t) { queue.push(t); pump(); } },
+    push: function (txt) { if (gen === speechGen && txt) { queue.push(txt); pump(); } },
     finish: function () {
       finished = true;
-      if (gen === speechGen && (active || queue.length)) setStatus(S, 'تمت الترجمة — جارٍ النطق…');
+      if (gen === speechGen && (active || queue.length)) setStatus(S, t(S, 'translatedSpeak'));
       pump();
     },
     cancel: function () { if (gen === speechGen) speechGen++; }
   };
 }
-function copyNative(text, btn) {
+function copyNative(text, btn, doneLabel) {
   if (!text) return;
-  if (window.VoiceBridge) { try { VoiceBridge.copyText(text); flashBtn(btn, '✓ نُسخ'); return; } catch (e) {} }
-  if (navigator.clipboard) navigator.clipboard.writeText(text).then(function () { flashBtn(btn, '✓ نُسخ'); }, function () {});
+  var label = doneLabel || '✓ نُسخ';
+  if (window.VoiceBridge) { try { VoiceBridge.copyText(text); flashBtn(btn, label); return; } catch (e) {} }
+  if (navigator.clipboard) navigator.clipboard.writeText(text).then(function () { flashBtn(btn, label); }, function () {});
 }
 function flashBtn(btn, txt) {
   if (!btn) return;
@@ -428,13 +642,13 @@ function buildPanel(key, title, defaultLang) {
     '<button class="speak">🎤 تحدّث</button>' +
     '<div class="status"></div>' +
     '<div class="phrases"></div>' +
-    '<label class="lbl">ما سُمع (أو اكتبه بنفسك — وضع الكتابة):</label>' +
+    '<label class="lbl heard-lbl">ما سُمع (أو اكتبه بنفسك — وضع الكتابة):</label>' +
     '<textarea class="heard" rows="2" dir="auto" placeholder="…"></textarea>' +
     '<div class="suggest" hidden><span class="txt"></span>' +
     '<button class="yes">قبول التصحيح</button><button class="no">تجاهل</button></div>' +
     '<div class="row"><button class="mini copy-heard">📋 نسخ النص</button>' +
     '<button class="mini translate">🔁 ترجم ونطق</button></div>' +
-    '<label class="lbl">الترجمة بلغة الطرف الآخر:</label>' +
+    '<label class="lbl tr-lbl">الترجمة بلغة الطرف الآخر:</label>' +
     '<div class="translation" dir="auto"></div>' +
     '<div class="row"><button class="mini copy-tr">📋 نسخ الترجمة</button>' +
     '<button class="mini speak-tr">🔊 نطق الترجمة</button></div>';
@@ -443,14 +657,17 @@ function buildPanel(key, title, defaultLang) {
   var S = {
     key: key, lang: defaultLang,
     el: {
+      sec: sec, who: sec.querySelector('.who'),
       lang: sec.querySelector('.lang'), voice: sec.querySelector('.voice'),
       speak: sec.querySelector('.speak'), status: sec.querySelector('.status'),
       phrases: sec.querySelector('.phrases'), heard: sec.querySelector('.heard'),
+      heardLbl: sec.querySelector('.heard-lbl'), trLbl: sec.querySelector('.tr-lbl'),
       suggest: sec.querySelector('.suggest'), suggestTxt: sec.querySelector('.suggest .txt'),
       suggestYes: sec.querySelector('.suggest .yes'), suggestNo: sec.querySelector('.suggest .no'),
       copyHeard: sec.querySelector('.copy-heard'), translate: sec.querySelector('.translate'),
       translation: sec.querySelector('.translation'),
-      copyTr: sec.querySelector('.copy-tr'), speakTr: sec.querySelector('.speak-tr')
+      copyTr: sec.querySelector('.copy-tr'), speakTr: sec.querySelector('.speak-tr'),
+      chips: []
     },
     recording: false, busy: false, lastTranslation: ''
   };
@@ -462,24 +679,25 @@ function buildPanel(key, title, defaultLang) {
     S.el.lang.appendChild(o);
   });
   S.el.lang.value = defaultLang;
-  fillVoices(S);
-  S.el.lang.addEventListener('change', function () { S.lang = S.el.lang.value; fillVoices(S); });
+  // تغيير لغة الطرف يبدّل واجهة مربعه كلها إلى لغته فورًا (1.4)
+  S.el.lang.addEventListener('change', function () { S.lang = S.el.lang.value; applyPanelLang(S); });
 
   PHRASES.forEach(function (p) {
     var b = document.createElement('button');
-    b.className = 'chip'; b.textContent = p.chip;
+    b.className = 'chip'; b.textContent = p.chips[S.lang];
     b.addEventListener('click', function () {
       S.el.heard.value = p[S.lang];
       hideSuggest(S);
       runTranslation(S, true);
     });
     S.el.phrases.appendChild(b);
+    S.el.chips.push(b);
   });
 
   S.el.speak.addEventListener('click', function () { toggleSpeak(S); });
   S.el.translate.addEventListener('click', function () { hideSuggest(S); runTranslation(S, true); });
-  S.el.copyHeard.addEventListener('click', function () { copyNative(S.el.heard.value.trim(), S.el.copyHeard); });
-  S.el.copyTr.addEventListener('click', function () { copyNative(S.lastTranslation, S.el.copyTr); });
+  S.el.copyHeard.addEventListener('click', function () { copyNative(S.el.heard.value.trim(), S.el.copyHeard, t(S, 'copied')); });
+  S.el.copyTr.addEventListener('click', function () { copyNative(S.lastTranslation, S.el.copyTr, t(S, 'copied')); });
   S.el.speakTr.addEventListener('click', function () {
     if (speaking) { stopNative(); return; }
     if (S.lastTranslation) speakFor(S, S.lastTranslation);
@@ -493,49 +711,73 @@ function buildPanel(key, title, defaultLang) {
     hideSuggest(S);
     runTranslation(S, true); // تجاهل التصحيح: تُرجم النص كما سُمع أصلًا
   });
+  applyPanelLang(S);
   return S;
 }
 function fillVoices(S) {
+  var cur = S.el.voice.value;
   S.el.voice.innerHTML = '';
   VOICES[S.lang].forEach(function (v) {
     var o = document.createElement('option');
-    o.value = v.id; o.textContent = 'صوت: ' + v.label;
+    o.value = v.id;
+    // عناوين الأصوات بلغة الطرف نفسه من القاموس (1.4)
+    o.textContent = t(S, 'voice') + (v.id === 'ar-system' ? t(S, 'sysVoice') : t(S, v.g === 'f' ? 'female' : 'male'));
     S.el.voice.appendChild(o);
   });
+  if (cur && VOICES[S.lang].some(function (v) { return v.id === cur; })) S.el.voice.value = cur;
+}
+// واجهة كل طرف بلغته (1.4): إعادة عرض كل سلاسل مربع الطرف من القاموس بلغة
+// طرفه الحالية، مع اتجاه المربع (RTL للعربية والأردية، LTR لغيرهما) وخط
+// النستعليق للأردية حيث يوفره الجهاز. تُستدعى عند البناء وعند كل تغيير لغة.
+function applyPanelLang(S) {
+  S.el.sec.setAttribute('dir', (S.lang === 'ar' || S.lang === 'ur') ? 'rtl' : 'ltr');
+  S.el.sec.setAttribute('lang', S.lang);
+  S.el.sec.setAttribute('data-lang', S.lang);
+  S.el.who.textContent = t(S, S.key === 'A' ? 'whoA' : 'whoB');
+  S.el.speak.textContent = S.recording ? t(S, 'stopSpeak') : t(S, 'speak');
+  S.el.heardLbl.textContent = t(S, 'heardLbl');
+  S.el.trLbl.textContent = t(S, 'trLbl');
+  S.el.copyHeard.textContent = t(S, 'copyHeard');
+  S.el.translate.textContent = t(S, 'translate');
+  S.el.copyTr.textContent = t(S, 'copyTr');
+  S.el.speakTr.textContent = t(S, 'speakTr');
+  S.el.suggestYes.textContent = t(S, 'yes');
+  S.el.suggestNo.textContent = t(S, 'no');
+  S.el.chips.forEach(function (b, i) { b.textContent = PHRASES[i].chips[S.lang]; });
+  fillVoices(S);
 }
 function setStatus(S, txt) { S.el.status.textContent = txt || ''; }
 function hideSuggest(S) { S.el.suggest.hidden = true; S._suggested = null; }
 
 function toggleSpeak(S) {
   if (S.recording) { finishRecording(S); return; }
-  if (recorder) { setStatus(S, 'الطرف الآخر يسجّل الآن…'); return; }
+  if (recorder) { setStatus(S, t(S, 'otherRecording')); return; }
   if (S.busy) return;
   stopNative();
-  setStatus(S, 'جارٍ فتح الميكروفون…');
+  setStatus(S, t(S, 'openingMic'));
   startRecording(S.key, function () { if (S.recording) finishRecording(S, true); }).then(function () {
     S.recording = true;
-    S.el.speak.textContent = '⏹ إيقاف وترجمة';
+    S.el.speak.textContent = t(S, 'stopSpeak');
     S.el.speak.classList.add('recording');
-    setStatus(S, '🎙️ أسمعك… تحدّث الآن — يتوقف تلقائيًا عند صمت 3 ثوانٍ، أو اضغط إيقاف');
+    setStatus(S, t(S, 'listening'));
     S._recTimer = setTimeout(function () { if (S.recording) finishRecording(S); }, 45000);
   }).catch(function () {
-    setStatus(S, 'تعذّر فتح الميكروفون — امنح الإذن من إعدادات التطبيق');
+    setStatus(S, t(S, 'micDenied'));
   });
 }
 function finishRecording(S, auto) {
   clearTimeout(S._recTimer);
   S.recording = false;
-  S.el.speak.textContent = '🎤 تحدّث';
+  S.el.speak.textContent = t(S, 'speak');
   S.el.speak.classList.remove('recording');
   var rec = stopRecording();
-  if (!rec || !rec.audio.length) { setStatus(S, 'لم يُلتقط صوت'); return; }
+  if (!rec || !rec.audio.length) { setStatus(S, t(S, 'noAudio')); return; }
   S.busy = true;
-  setStatus(S, auto
-    ? '⏹ إيقاف تلقائي (صمت 3 ثوانٍ) — جارٍ تحويل كلامك إلى نص… (قد يطول أول مرة)'
-    : 'جارٍ تحويل كلامك إلى نص… (قد يطول أول مرة)');
-  asrEngine.request({ type: 'asr', audio: rec.audio, whisperLang: LANGS[S.lang].whisper }).then(function (text) {
+  setStatus(S, t(S, auto ? 'convertingAuto' : 'converting'));
+  // السمع عبر نقطة الدخول الواحدة (1.4): أصلي أولًا، سقوط تلقائي لعامل الويب
+  transcribeAudio(rec.audio, S).then(function (text) {
     S.busy = false;
-    if (!text) { setStatus(S, 'لم أميّز كلامًا واضحًا — قرّب الهاتف وجرّب بجملة قصيرة'); return; }
+    if (!text) { setStatus(S, t(S, 'noSpeech')); return; }
     S.el.heard.value = text;
     // مطابقة ضبابية آمنة: اقتراح فقط، لا تصحيح صامت أبدًا.
     // ترتيب التدفق (1.2): إن وُجد اقتراح تصحيح معلّق لا تبدأ الترجمة التلقائية
@@ -545,16 +787,16 @@ function finishRecording(S, auto) {
     var m = matchPhrase(text, S.lang);
     if (m.phrase && m.score >= 0.8 && normalizeText(text) !== normalizeText(m.phrase[S.lang])) {
       S._suggested = m.phrase;
-      S.el.suggestTxt.textContent = 'هل قصدت: «' + m.phrase[S.lang] + '»؟';
+      S.el.suggestTxt.textContent = t(S, 'suggestQ').replace('{x}', m.phrase[S.lang]);
       S.el.suggest.hidden = false;
-      setStatus(S, '❓ راجع التصحيح المقترح — الترجمة بانتظار قبولك أو تجاهلك');
+      setStatus(S, t(S, 'reviewSuggest'));
     } else {
       hideSuggest(S);
       runTranslation(S, true);
     }
   }).catch(function () {
     S.busy = false;
-    setStatus(S, 'تعذّر السمع — أعد المحاولة');
+    setStatus(S, t(S, 'asrFailed'));
   });
 }
 
@@ -564,21 +806,20 @@ function finishRecording(S, auto) {
 // العامل (mt-done) تبقى هي الموثّقة في الصندوق وlastTranslation.
 function runTranslation(S, speakAfter) {
   var text = S.el.heard.value.trim();
-  if (!text) { setStatus(S, 'لا نص بعد — تحدّث أو اكتب أولًا'); return; }
+  if (!text) { setStatus(S, t(S, 'noText')); return; }
   var O = sides[otherKey(S.key)];
   var src = S.lang, tgt = O.lang;
   var done = function (result) {
     S.lastTranslation = result;
     S.el.translation.textContent = result;
-    setStatus(S, 'تمت الترجمة' + (speakAfter ? ' — جارٍ النطق…' : ''));
     if (speakAfter) speakFor(S, result);
-    else setStatus(S, 'تمت الترجمة');
+    else setStatus(S, t(S, 'translated'));
   };
   // عبارة جاهزة مطابقة للنص كله؟ خذ صيغتها الثابتة في لغة الهدف مباشرة
   var exact = exactPhrase(text, src);
   if (exact) { done(exact[tgt]); return; }
   if (src === tgt) { done(text); return; }
-  setStatus(S, 'جارٍ الترجمة…');
+  setStatus(S, t(S, 'translating'));
   S.lastTranslation = '';
   S.el.translation.textContent = '';
   var parts = [], arrived = 0;
@@ -591,18 +832,19 @@ function runTranslation(S, speakAfter) {
       var shown = parts.filter(function (x) { return typeof x === 'string'; }).join(' ');
       S.lastTranslation = shown;
       S.el.translation.textContent = shown;
-      setStatus(S, 'تُرجمت ' + arrived + ' من ' + p.total + (speakAfter ? ' — النطق يتدفق…' : '…'));
+      setStatus(S, t(S, speakAfter ? 'progressSpeak' : 'progressPlain')
+        .replace('{a}', arrived).replace('{b}', p.total));
       if (session) session.push(p.text);
     })
     .then(function (result) {
       S.lastTranslation = result;
       S.el.translation.textContent = result;
       if (session) session.finish();
-      else setStatus(S, 'تمت الترجمة');
+      else setStatus(S, t(S, 'translated'));
     })
     .catch(function () {
       if (session) session.cancel();
-      setStatus(S, 'تعذّرت الترجمة — أعد المحاولة');
+      setStatus(S, t(S, 'mtFailed'));
     });
 }
 // نطق ترجمة الطرف S بصوت الطرف الآخر ولغته (عبر جلسة نطق من جملة واحدة)
@@ -621,7 +863,7 @@ buildPanel('B', 'الطرف ب', 'en');
    إلى قائمة أصوات أي طرف لغته العربية فقط إن أكّد الجسر وجود صوت عربي
    فعلي على هذا الجهاز؛ إن غاب لا يظهر الخيار أصلًا — لا خيارات وهمية.
    الجسر ينطق هذا الاختيار عبر Android TextToSpeech بنفس منزلق السرعة. */
-var SYS_AR_VOICE = { id: 'ar-system', label: 'نظام الهاتف' };
+var SYS_AR_VOICE = { id: 'ar-system', g: 's' }; // عنوانه من قاموس الطرف (sysVoice)
 function refreshSystemArVoice() {
   try {
     if (!window.VoiceBridge || !VoiceBridge.arabicSystemVoiceAvailable()) return;
