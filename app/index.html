@@ -437,13 +437,14 @@ function makeEngine(kind, workerFile, statusEl, timeoutMs) {
 var asrEngine = makeEngine('asr', 'asr-worker.js', document.getElementById('asrStatus'), 600000);
 var mtEngine = makeEngine('mt', 'mt-worker.js', document.getElementById('mtStatus'), 300000);
 
-/* ================= السمع الأصلي عبر الجسر (1.4) =================
-   المسار الأساسي: Whisper-small نفسه لكن عبر sherpa-onnx الأصلي في الجسر
-   (أنوية الجهاز كلها) بدل عامل الويب (wasm بخيط واحد فعليًا). الصوت يُرسل
-   PCM16 بـBase64 من مسار التسجيل القائم نفسه (16kHz). أي فشل في المسار
-   الأصلي — بناءً أو فكًّا أو مهلة — يسقط تلقائيًا إلى عامل الويب القديم
-   الذي يبقى في الحزمة كما هو. سطر سجل في الجسر وفي وحدة التحكم يوثّق
-   أيَّ مسارٍ خدم كل طلب. */
+/* ================= السمع الأصلي عبر الجسر (1.4، وسلسلة 1.6) =================
+   المسار الأساسي: السمع عبر sherpa-onnx الأصلي في الجسر (أنوية الجهاز كلها)
+   بدل عامل الويب (wasm بخيط واحد فعليًا). الصوت يُرسل PCM16 بـBase64 من
+   مسار التسجيل القائم نفسه (16kHz). سلسلة السقوط من 1.6: أذن turbo
+   (large-v3-turbo — الأقوى للعربية بقياس موثّق) ثم أذن small (1.4) داخل
+   الجسر نفسه، ثم عامل الويب القديم الذي يبقى في الحزمة كما هو عند فشل
+   الأصلي كله — بناءً أو فكًّا أو مهلة. سطر سجل في الجسر وفي وحدة التحكم
+   يوثّق أيَّ أذنٍ خدمت كل طلب، وشارة الحالة تسمّي الأذن الجاهزة فعلًا. */
 var asrCbSeq = 0, asrCallbacks = {};
 window.__asrCallback = function (id, ok, payload) {
   var cb = asrCallbacks[id];
@@ -452,6 +453,10 @@ window.__asrCallback = function (id, ok, payload) {
 };
 function nativeAsrReady() {
   try { return !!(window.VoiceBridge && VoiceBridge.asrNativeAvailable()); } catch (e) { return false; }
+}
+// اسم الأذن الأصلية الجاهزة فعلًا من الجسر: 'turbo' أو 'small' أو '' عند غيابها
+function nativeAsrKind() {
+  try { return (window.VoiceBridge && VoiceBridge.asrNativeKind()) || ''; } catch (e) { return ''; }
 }
 function pcm16Base64(floats) {
   var bytes = new Uint8Array(floats.length * 2);
@@ -479,11 +484,15 @@ function transcribeNative(audio, lang) {
     catch (e) { clearTimeout(timer); delete asrCallbacks[id]; reject(e); }
   });
 }
-// نقطة السمع الواحدة لكل الطلبات: الأصلي أولًا، والسقوط إلى عامل الويب عند أي فشل
+// نقطة السمع الواحدة لكل الطلبات: الأصلي أولًا (turbo ثم small داخل الجسر)،
+// والسقوط إلى عامل الويب عند فشل الأصلي كله. سطر وحدة التحكم يسمّي الأذن
+// التي خدمت الطلب فعلًا كما يردّها الجسر بعد النداء.
 function transcribeAudio(audio, S) {
   if (nativeAsrReady()) {
     return transcribeNative(audio, S.lang).then(function (text) {
-      console.log('asr path=native lang=' + S.lang);
+      var served = '';
+      try { served = VoiceBridge.asrLastServedKind() || ''; } catch (e) {}
+      console.log('asr path=native-' + (served || 'unknown') + ' lang=' + S.lang);
       return text;
     }, function (err) {
       console.log('asr path=web-worker (fallback after native failure: ' + (err && err.message) + ')');
@@ -495,23 +504,39 @@ function transcribeAudio(audio, S) {
 }
 
 // إقلاع المحركات: إن كان السمع الأصلي جاهزًا لا نحمّل عامل سمع الويب أصلًا
-// (ذاكرة ووقت) ونحمّل الترجمة مباشرة. بناء المعرّف الأصلي يجري في خيط
+// (ذاكرة ووقت) ونحمّل الترجمة مباشرة. بناء المعرّفات الأصلية يجري في خيط
 // خلفي عند إقلاع التطبيق، فنستطلع الجسر على فترات؛ فإن تأخر كثيرًا سخّنّا
 // عامل الويب احتياطًا (يبقى السمع الأصلي مفضّلًا متى جهز).
-asrEngine.onready = function () { mtEngine.preload(); };
+asrEngine.onready = function () {
+  mtEngine.preload();
+  // صدق الشارة (1.6): عامل الويب كتب «جاهز» في الحدث نفسه قبل هذا الردّ —
+  // فإن كانت أذن أصلية جاهزة أعد إثبات شارتها باسمها، وإلا فالعامل هو
+  // الأذن الخادمة وتسمّيه الشارة «ويب».
+  if (nativeAsrReady()) showNativeBadge();
+  else {
+    var el = document.getElementById('asrStatus');
+    el.textContent = 'السمع: جاهز (ويب)';
+    el.className = 'eng ok';
+  }
+};
 var webAsrStarted = false;
 function startWebAsr() { if (!webAsrStarted) { webAsrStarted = true; asrEngine.preload(); } }
+// شارة السمع تسمّي الأذن الأصلية الجاهزة فعلًا كما يردّها الجسر (turbo/small)
+function showNativeBadge() {
+  var kind = nativeAsrKind();
+  if (!kind) return;
+  var el = document.getElementById('asrStatus');
+  el.textContent = 'السمع: جاهز (أصلي ' + kind + ')';
+  el.className = 'eng ok';
+}
 var asrPolls = 0;
 function pollNativeAsr() {
-  if (nativeAsrReady()) {
-    var el = document.getElementById('asrStatus');
-    el.textContent = 'السمع: جاهز (أصلي داخل الجهاز)';
-    el.className = 'eng ok';
-    mtEngine.preload();
-    return;
-  }
-  if (++asrPolls >= 8) { startWebAsr(); return; }
-  setTimeout(pollNativeAsr, 3000);
+  if (nativeAsrReady()) { showNativeBadge(); mtEngine.preload(); return; }
+  // بعد ~24 ثانية سخّن عامل الويب احتياطًا، لكن واصل الاستطلاع: تسخين
+  // turbo (ملفاته ~1GB تُستخرج أول مرة) قد يطول على الجهاز، ومتى جهزت
+  // الأذن الأصلية صارت هي الخادمة وسمّتها الشارة — حتى حدّ دقيقتين.
+  if (++asrPolls >= 8) startWebAsr();
+  if (asrPolls < 40) setTimeout(pollNativeAsr, 3000);
 }
 pollNativeAsr();
 

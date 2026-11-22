@@ -1,11 +1,12 @@
 #!/bin/bash
-# بناء APK «المترجم الصوتي» 1.5 — دون اتصال بالكامل:
-# سمع Whisper-small أصلي عبر sherpa-onnx (وعامل ويب Transformers.js احتياطيًا عند أي فشل)
+# بناء APK «المترجم الصوتي» 1.6 — دون اتصال بالكامل:
+# سمع أصلي عبر sherpa-onnx بسلسلة سقوط: Whisper-large-v3-turbo أولًا (1.6)
+# ثم Whisper-small (1.4) ثم عامل ويب Transformers.js عند فشل الأصلي كله
 # + ترجمة NLLB (Transformers.js داخل WebView) + نطق Piper أصلي عبر sherpa-onnx.
 # درس إلزامي من ناسخ الكلمات: MainActivity.java يُعاد كتابته هنا داخل السكربت (heredoc) — أي تعديل عليه يكون هنا.
 set -e
 exec > >(tee -a "$HOME/workspace/voice-translator/android/build.log") 2>&1
-echo "=== VOICE TRANSLATOR BUILD (APK 1.5) START $(date) ==="
+echo "=== VOICE TRANSLATOR BUILD (APK 1.6) START $(date) ==="
 
 PROJ="$HOME/workspace/voice-translator/android"
 APP="$HOME/workspace/voice-translator/app"
@@ -18,7 +19,7 @@ AJAR="$SDK/platforms/android-34/android.jar"
 BT="$SDK/build-tools/34.0.0"
 SHERPA_JAR="$HOME/workspace/voice-translator/sherpa-aar/extracted-1.12.40/classes.jar"
 KOTLIN_JAR="$SDK/cmdline-tools/latest/lib/external/org/jetbrains/kotlin/kotlin-stdlib/1.9.0/kotlin-stdlib-1.9.0.jar"
-OUT="$HOME/workspace/voice-translator/voice-translator-1.5.apk"
+OUT="$HOME/workspace/voice-translator/voice-translator-1.6.apk"
 
 cd "$PROJ"
 mkdir -p assets/www/engines/models gen classes dex src/com/hilalsameer/voice res/values stage
@@ -58,6 +59,13 @@ mkdir -p assets/asr/whisper-small
 cp "$BUNDLE/whisper-small-sherpa/small-encoder.int8.onnx" \
    "$BUNDLE/whisper-small-sherpa/small-decoder.int8.onnx" \
    "$BUNDLE/whisper-small-sherpa/small-tokens.txt" assets/asr/whisper-small/
+# أذن turbo الأساسية (1.6): Whisper-large-v3-turbo بصيغة sherpa الرسمية (int8)
+# من مرآة k2-fsa على HF (csukuangfj/sherpa-onnx-whisper-turbo) — ملفات القياس
+# نفسها الموثّقة في تقرير arabic-asr-upgrade-2026-11-22 (البصمات في BUILD.md §1.6).
+mkdir -p assets/asr/whisper-turbo
+cp "$BUNDLE/whisper-turbo-sherpa/turbo-encoder.int8.onnx" \
+   "$BUNDLE/whisper-turbo-sherpa/turbo-decoder.int8.onnx" \
+   "$BUNDLE/whisper-turbo-sherpa/turbo-tokens.txt" assets/asr/whisper-turbo/
 du -sh assets assets/www assets/tts assets/asr
 
 # ---------- البيان والموارد ----------
@@ -65,7 +73,7 @@ cat > AndroidManifest.xml <<'EOF'
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.hilalsameer.voice"
-    android:versionCode="6" android:versionName="1.5">
+    android:versionCode="7" android:versionName="1.6">
   <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="34"/>
   <uses-permission android:name="android.permission.RECORD_AUDIO"/>
   <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS"/>
@@ -256,8 +264,9 @@ public class MainActivity extends Activity {
     // تهيئة صوت نظام الهاتف (مسار نطق ثانٍ للعربية فقط، 1.3): يفحص الجسر توفر
     // صوت عربي فعلي على الجهاز ويُعلم الصفحة عند الجاهزية.
     bridge.ensureSysTts();
-    // تسخين السمع الأصلي في الخلفية (1.4): استخراج ملفات Whisper بصيغة sherpa
-    // وبناء المعرّف، كي يكون المسار الأصلي جاهزًا عند أول تسجيل.
+    // تسخين السمع الأصلي في الخلفية (1.4، وturbo أولًا من 1.6): استخراج ملفات
+    // Whisper بصيغة sherpa وبناء المعرّفات، كي تكون الأذن الأساسية جاهزة
+    // عند أول تسجيل.
     new Thread(() -> {
       try { bridge.warmAsr(); } catch (Throwable ignored) {}
     }).start();
@@ -319,15 +328,21 @@ public class MainActivity extends Activity {
     private volatile int sysArState = -1; // ‎-1 لم يُعرف بعد، 0 لا يوجد، 1 يوجد صوت عربي فعلي
     private volatile Voice sysArVoice;
     private volatile int sysPendingCb = -1;
-    // السمع الأصلي (1.4): OfflineRecognizer بـWhisper-small بصيغة sherpa (int8)
-    // — نفس النموذج، بلا عامل ويب. اللغة تُفرض لكل طلب عبر setConfig (يقرأها
-    // فكّاك whisper من إعداداته عند كل فكّ ويعيد كتابة رمز اللغة الابتدائي)،
-    // فلا إعادة بناء للجلسات عند تبديل اللغات.
+    // السمع الأصلي (1.4، وسلسلة 1.6): معرّفا OfflineRecognizer بصيغة sherpa
+    // (int8) بلا عامل ويب — turbo (large-v3-turbo) أساسيًا من 1.6 وsmall
+    // (whisper-small) احتياطيًا تحتها. اللغة تُفرض لكل طلب عبر setConfig
+    // (يقرأها فكّاك whisper من إعداداته عند كل فكّ ويعيد كتابة رمز اللغة
+    // الابتدائي)، فلا إعادة بناء للجلسات عند تبديل اللغات.
     private OfflineRecognizer asr;
+    private OfflineRecognizer asrTurbo;
     private File asrEnc, asrDec, asrTokens;
-    private String asrLang; // لغة الإعداد الحالي للمعرّف
+    private File turboEnc, turboDec, turboTokens;
+    private String asrLang; // لغة الإعداد الحالي لمعرّف small
+    private String turboLang; // لغة الإعداد الحالي لمعرّف turbo
     private final Object asrLock = new Object();
-    private volatile int asrState = 0; // 0 لم يُبنَ بعد، 1 جاهز، ‎-1 فشل نهائي (الصفحة تستخدم عامل الويب وحده)
+    private volatile int asrState = 0; // small: 0 لم يُبنَ بعد، 1 جاهز، ‎-1 فشل نهائي
+    private volatile int turboState = 0; // turbo: 0 لم يُبنَ بعد، 1 جاهز، ‎-1 فشل نهائي
+    private volatile String asrLastKind = ""; // الأذن التي خدمت آخر طلب فعلًا: turbo/small
 
     @JavascriptInterface public void copyText(final String text) {
       runOnUiThread(() -> {
@@ -499,23 +514,49 @@ public class MainActivity extends Activity {
       }
     }
 
-    /* ===== السمع الأصلي (1.4) — Whisper-small عبر sherpa-onnx =====
-       المسار الأساسي للسمع من 1.4: الصفحة ترسل PCM 16kHz (PCM16 بـBase64)
-       من مسار التسجيل القائم نفسه، فيتعرّف عليه المعرّف الأصلي هنا.
-       أي فشل (استخراج/بناء/فكّ) يردّ خطأً للصفحة فتسقط تلقائيًا إلى عامل
-       الويب القديم الذي يبقى في الحزمة كما هو — لا تعطّل كامل أبدًا. */
+    /* ===== السمع الأصلي (1.4) + أذن turbo الأساسية (1.6) =====
+       الصفحة ترسل PCM 16kHz (PCM16 بـBase64) من مسار التسجيل القائم نفسه،
+       فيتعرّف عليه المعرّف الأصلي هنا. سلسلة السقوط من 1.6: turbo أولًا
+       (large-v3-turbo — فاز بقياس الإصلاح العام للعربية: CER ‏1.11% مقابل
+       3.58% لـsmall على مجموعة 11 جملة، تقرير
+       voice-test/arabic-asr-upgrade-2026-11-22.md)، فإن فشل بناؤه أو فكّه
+       خدم small (مسار 1.4 كما هو)، فإن فشلا معًا ردّ النداء خطأً للصفحة
+       فتسقط تلقائيًا إلى عامل الويب القديم الذي يبقى في الحزمة كما هو —
+       لا تعطّل كامل أبدًا. فشل بناء أي أذن نهائي ويُعلَّم (state=-1) فلا
+       تُفضَّل بعده، وسطر السجل يوثّق الأذن الخادمة لكل طلب باسمها. */
 
-    // تسخين عند إقلاع التطبيق (خيط خلفي من onCreate): استخراج + بناء.
+    // تسخين عند إقلاع التطبيق (خيط خلفي من onCreate): turbo أولًا؛ فإن سقط
+    // بناؤه نهائيًا سُخّن small كي تكون أذن أصلية جاهزة على الأقل.
     void warmAsr() {
       synchronized (asrLock) {
-        try { ensureAsrLocked(); }
-        catch (Throwable e) { Log.e(TAG, "asr warm failed", e); }
+        try { ensureTurboLocked(); }
+        catch (Throwable e) { Log.e(TAG, "asr turbo warm failed", e); }
+        if (turboState != 1) {
+          try { ensureAsrLocked(); }
+          catch (Throwable e) { Log.e(TAG, "asr small warm failed", e); }
+        }
       }
     }
 
-    // للصفحة: هل المسار الأصلي جاهز؟ (تُفضّله الصفحة وتسقط للويب عند غيابه)
+    // للصفحة: هل توجد أذن أصلية جاهزة؟ (تُفضّلها الصفحة وتسقط للويب عند غيابها)
     @JavascriptInterface public boolean asrNativeAvailable() {
-      return asrState == 1;
+      return turboState == 1 || asrState == 1;
+    }
+
+    // للصفحة (1.6): اسم الأذن الأصلية الجاهزة فعلًا — turbo أولًا ثم small،
+    // وسلسلة فارغة عند غياب أي أذن أصلية (عامل الويب هو الخادم حينها).
+    // شارة حالة السمع في الصفحة تعرض هذا الاسم كما هو، فلا تدّعي أذنًا
+    // غير التي تخدم.
+    @JavascriptInterface public String asrNativeKind() {
+      if (turboState == 1) return "turbo";
+      if (asrState == 1) return "small";
+      return "";
+    }
+
+    // للصفحة (1.6): الأذن التي خدمت آخر طلب سمع فعلًا (turbo/small) —
+    // توثّقها الصفحة في سطر وحدة التحكم لكل طلب.
+    @JavascriptInterface public String asrLastServedKind() {
+      return asrLastKind;
     }
 
     // تعرّف أصلي: يعمل على خيط الجسر ويحظر حتى الاكتمال (نمط speak نفسه)،
@@ -523,6 +564,7 @@ public class MainActivity extends Activity {
     @JavascriptInterface public void transcribeNative(final String b64, final String lang, final int cbId) {
       boolean ok = false;
       String payload = "";
+      String served = "";
       long t0 = System.currentTimeMillis();
       int sampleCount = 0;
       try {
@@ -534,16 +576,29 @@ public class MainActivity extends Activity {
         }
         sampleCount = samples.length;
         synchronized (asrLock) {
-          ensureAsrLocked();
-          setAsrLanguageLocked(lang);
-          payload = decodeChunkedLocked(samples);
+          try {
+            ensureTurboLocked();
+            turboLang = applyAsrLang(asrTurbo, turboEnc, turboDec, turboTokens, turboLang, lang);
+            payload = decodeChunkedLocked(asrTurbo, samples);
+            served = "turbo";
+          } catch (Throwable te) {
+            // سقوط داخل الجسر (1.6): أي فشل في turbo — بناءً أو فكًّا —
+            // يخدمه small في الطلب نفسه قبل أن تفكّر الصفحة في الويب.
+            Log.w(TAG, "asr turbo failed, falling back to small: " + te);
+            ensureAsrLocked();
+            asrLang = applyAsrLang(asr, asrEnc, asrDec, asrTokens, asrLang, lang);
+            payload = decodeChunkedLocked(asr, samples);
+            served = "small";
+          }
         }
+        asrLastKind = served;
         ok = true;
       } catch (Throwable e) {
         payload = String.valueOf(e);
         Log.e(TAG, "asr native failed", e instanceof Exception ? (Exception) e : new Exception(e));
       }
-      Log.i(TAG, "asr path=native lang=" + lang + " ok=" + ok + " samples=" + sampleCount
+      Log.i(TAG, "asr path=" + (served.isEmpty() ? "native-failed" : served)
+          + " lang=" + lang + " ok=" + ok + " samples=" + sampleCount
           + " ms=" + (System.currentTimeMillis() - t0));
       final boolean fok = ok;
       final String fpayload = payload;
@@ -564,25 +619,54 @@ public class MainActivity extends Activity {
         extractVerified("asr/whisper-small/small-encoder.int8.onnx", asrEnc);
         extractVerified("asr/whisper-small/small-decoder.int8.onnx", asrDec);
         extractVerified("asr/whisper-small/small-tokens.txt", asrTokens);
-        asr = new OfflineRecognizer(null, buildAsrConfig("ar"));
+        asr = new OfflineRecognizer(null, buildAsrConfig(asrEnc, asrDec, asrTokens, "ar"));
       } catch (Throwable e) {
         asrState = -1; // فشل نهائي: لا تُفضّل الصفحة هذا المسار بعد الآن
         throw e instanceof Exception ? (Exception) e : new Exception(e);
       }
       asrLang = "ar";
       asrState = 1;
-      Log.i(TAG, "asr native built enc=" + asrEnc.length() + " dec=" + asrDec.length());
+      Log.i(TAG, "asr small built enc=" + asrEnc.length() + " dec=" + asrDec.length());
     }
 
-    private OfflineRecognizerConfig buildAsrConfig(String lang) {
+    // بناء معرّف turbo عند الحاجة (داخل asrLock): استخراج موثّق بالحجم إلى
+    // جذر جديد asr/v16 ثم بناء الجلسات بلغة ابتدائية (العربية — لغة الطرف أ).
+    private void ensureTurboLocked() throws Exception {
+      if (asrTurbo != null) return;
+      if (turboState == -1) throw new Exception("native turbo unavailable (earlier failure)");
+      File dir = new File(new File(getFilesDir(), "asr"), "v16/whisper-turbo");
+      if (!dir.isDirectory()) dir.mkdirs();
+      turboEnc = new File(dir, "turbo-encoder.int8.onnx");
+      turboDec = new File(dir, "turbo-decoder.int8.onnx");
+      turboTokens = new File(dir, "turbo-tokens.txt");
+      try {
+        extractVerified("asr/whisper-turbo/turbo-encoder.int8.onnx", turboEnc);
+        extractVerified("asr/whisper-turbo/turbo-decoder.int8.onnx", turboDec);
+        extractVerified("asr/whisper-turbo/turbo-tokens.txt", turboTokens);
+        asrTurbo = new OfflineRecognizer(null, buildAsrConfig(turboEnc, turboDec, turboTokens, "ar"));
+      } catch (Throwable e) {
+        turboState = -1; // فشل نهائي: لا تُفضَّل هذه الأذن بعد الآن
+        throw e instanceof Exception ? (Exception) e : new Exception(e);
+      }
+      turboLang = "ar";
+      turboState = 1;
+      Log.i(TAG, "asr turbo built enc=" + turboEnc.length() + " dec=" + turboDec.length());
+    }
+
+    // إعداد معرّف whisper لأي أذن (small/turbo) — بناء واحد مشترك.
+    // ملاحظة featureDim=80 للاثنتين معًا: محرك whisper في sherpa يقرأ
+    // n_mels من بيانات النموذج الوصفية نفسها (مشفّر turbo يحمل n_mels=128
+    // في بياناته)، وبنفس هذا الإعداد حرفيًا قاس تقرير الإصلاح العام turbo
+    // عبر from_whisper فأعطى CER ‏1.11% — فلا إعداد خاصًّا لـturbo هنا.
+    private OfflineRecognizerConfig buildAsrConfig(File enc, File dec, File tokens, String lang) {
       OfflineWhisperModelConfig wcfg = new OfflineWhisperModelConfig();
-      wcfg.setEncoder(asrEnc.getAbsolutePath());
-      wcfg.setDecoder(asrDec.getAbsolutePath());
+      wcfg.setEncoder(enc.getAbsolutePath());
+      wcfg.setDecoder(dec.getAbsolutePath());
       wcfg.setLanguage(lang);
       wcfg.setTask("transcribe");
       OfflineModelConfig mcfg = new OfflineModelConfig();
       mcfg.setWhisper(wcfg);
-      mcfg.setTokens(asrTokens.getAbsolutePath());
+      mcfg.setTokens(tokens.getAbsolutePath());
       mcfg.setNumThreads(4);
       mcfg.setDebug(false);
       mcfg.setProvider("cpu");
@@ -596,30 +680,31 @@ public class MainActivity extends Activity {
       return rcfg;
     }
 
-    // فرض لغة الطلب (داخل asrLock): setConfig تُحدّث إعداد whisper داخل
-    // المحرك، وفكّاكه يقرأ اللغة من إعداداته عند كل فكّ — فلا إعادة بناء.
-    private void setAsrLanguageLocked(String lang) {
-      if (lang == null || lang.equals(asrLang)) return;
-      asr.setConfig(buildAsrConfig(lang));
-      asrLang = lang;
+    // فرض لغة الطلب على معرّف بعينه (داخل asrLock): setConfig تُحدّث إعداد
+    // whisper داخل المحرك، وفكّاكه يقرأ اللغة من إعداداته عند كل فكّ —
+    // فلا إعادة بناء. تعيد لغة الإعداد الجديدة لتُحفظ في حقل الأذن.
+    private String applyAsrLang(OfflineRecognizer rec, File enc, File dec, File tokens, String cur, String lang) {
+      if (lang == null || lang.equals(cur)) return cur;
+      rec.setConfig(buildAsrConfig(enc, dec, tokens, lang));
       Log.i(TAG, "asr language set to " + lang);
+      return lang;
     }
 
-    // فكّ الصوت (داخل asrLock). حدّ محرك whisper في sherpa: أول ~29.5 ثانية
-    // فقط من أي دفقة واحدة — فنقطع التسجيل (سقفه 45 ثانية أصلًا) إلى قطع
-    // 25 ثانية متتالية ونفكّ كلًّا وحدها ثم نصل النصوص.
-    private String decodeChunkedLocked(float[] samples) throws Exception {
+    // فكّ الصوت بمعرّف بعينه (داخل asrLock). حدّ محرك whisper في sherpa:
+    // أول ~29.5 ثانية فقط من أي دفقة واحدة — فنقطع التسجيل (سقفه 45 ثانية
+    // أصلًا) إلى قطع 25 ثانية متتالية ونفكّ كلًّا وحدها ثم نصل النصوص.
+    private String decodeChunkedLocked(OfflineRecognizer rec, float[] samples) throws Exception {
       final int CHUNK = 25 * 16000;
       StringBuilder out = new StringBuilder();
       for (int off = 0; off < samples.length; off += CHUNK) {
         int n = Math.min(CHUNK, samples.length - off);
         float[] part = new float[n];
         System.arraycopy(samples, off, part, 0, n);
-        OfflineStream stream = asr.createStream();
+        OfflineStream stream = rec.createStream();
         try {
           stream.acceptWaveform(part, 16000);
-          asr.decode(stream);
-          String text = asr.getResult(stream).getText();
+          rec.decode(stream);
+          String text = rec.getResult(stream).getText();
           if (text != null) {
             text = text.trim();
             if (!text.isEmpty()) {
