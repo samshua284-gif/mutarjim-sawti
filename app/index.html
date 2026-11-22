@@ -307,15 +307,34 @@ function resampleTo16k(samples, fromRate) {
   }
   return out;
 }
-function startRecording(side) {
+function startRecording(side, onAutoStop) {
   return navigator.mediaDevices.getUserMedia({ audio: true }).then(function (stream) {
     var AC = window.AudioContext || window.webkitAudioContext;
     var ctx = new AC();
     var src = ctx.createMediaStreamSource(stream);
     var proc = ctx.createScriptProcessor(4096, 1, 1);
     var chunks = [];
+    // إيقاف تلقائي عند الصمت (إضافة 1.1 بطلب Hilal): نراقب مستوى الصوت من
+    // نفس مسار التسجيل — فإذا بدأ كلام فعلي (RMS فوق العتبة مرة على الأقل)
+    // ثم استمر صمت متواصل ≥ 3.0 ثوانٍ، نوقف التسجيل ونكمل السلسلة تلقائيًا.
+    // إن لم يبدأ كلام أصلًا فلا إيقاف صمتي (يبقى اليدوي وسقف 45 ثانية).
+    var SPEECH_RMS = 0.02, SILENCE_STOP_MS = 3000;
+    var heardSpeech = false, silenceMs = 0, autoFired = false;
     proc.onaudioprocess = function (ev) {
-      chunks.push(new Float32Array(ev.inputBuffer.getChannelData(0)));
+      var data = ev.inputBuffer.getChannelData(0);
+      chunks.push(new Float32Array(data));
+      var sum = 0, i;
+      for (i = 0; i < data.length; i++) sum += data[i] * data[i];
+      var rms = Math.sqrt(sum / data.length);
+      if (rms >= SPEECH_RMS) {
+        heardSpeech = true; silenceMs = 0;
+      } else if (heardSpeech && !autoFired) {
+        silenceMs += ev.inputBuffer.duration * 1000;
+        if (silenceMs >= SILENCE_STOP_MS) {
+          autoFired = true;
+          if (typeof onAutoStop === 'function') onAutoStop();
+        }
+      }
     };
     src.connect(proc); proc.connect(ctx.destination);
     recorder = { stream: stream, ctx: ctx, proc: proc, src: src, chunks: chunks, rate: ctx.sampleRate, side: side };
@@ -433,17 +452,17 @@ function toggleSpeak(S) {
   if (S.busy) return;
   stopNative();
   setStatus(S, 'جارٍ فتح الميكروفون…');
-  startRecording(S.key).then(function () {
+  startRecording(S.key, function () { if (S.recording) finishRecording(S, true); }).then(function () {
     S.recording = true;
     S.el.speak.textContent = '⏹ إيقاف وترجمة';
     S.el.speak.classList.add('recording');
-    setStatus(S, '🎙️ أسمعك… تحدّث الآن، ثم اضغط إيقاف');
+    setStatus(S, '🎙️ أسمعك… تحدّث الآن — يتوقف تلقائيًا عند صمت 3 ثوانٍ، أو اضغط إيقاف');
     S._recTimer = setTimeout(function () { if (S.recording) finishRecording(S); }, 45000);
   }).catch(function () {
     setStatus(S, 'تعذّر فتح الميكروفون — امنح الإذن من إعدادات التطبيق');
   });
 }
-function finishRecording(S) {
+function finishRecording(S, auto) {
   clearTimeout(S._recTimer);
   S.recording = false;
   S.el.speak.textContent = '🎤 تحدّث';
@@ -451,7 +470,9 @@ function finishRecording(S) {
   var rec = stopRecording();
   if (!rec || !rec.audio.length) { setStatus(S, 'لم يُلتقط صوت'); return; }
   S.busy = true;
-  setStatus(S, 'جارٍ تحويل كلامك إلى نص… (قد يطول أول مرة)');
+  setStatus(S, auto
+    ? '⏹ إيقاف تلقائي (صمت 3 ثوانٍ) — جارٍ تحويل كلامك إلى نص… (قد يطول أول مرة)'
+    : 'جارٍ تحويل كلامك إلى نص… (قد يطول أول مرة)');
   asrEngine.request({ type: 'asr', audio: rec.audio, whisperLang: LANGS[S.lang].whisper }).then(function (text) {
     S.busy = false;
     if (!text) { setStatus(S, 'لم أميّز كلامًا واضحًا — قرّب الهاتف وجرّب بجملة قصيرة'); return; }
