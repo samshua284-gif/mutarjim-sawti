@@ -182,8 +182,11 @@ var LANG_ORDER = ['ar', 'en', 'hi', 'ur'];
 // الأصوات المتاحة فعليًا داخل التطبيق لكل لغة (من حزمة Piper المُثبتة) — لا يُعرض صوت غير موجود.
 // g = جنس الصوت؛ العنوان الظاهر يُبنى من قاموس واجهة الطرف (1.4) بلغة الطرف نفسه.
 var VOICES = {
-  ar: [ { id: 'ar_JO-kareem-medium', g: 'm' } ],
-  en: [ { id: 'en_US-amy-medium', g: 'f' }, { id: 'en_US-ryan-medium', g: 'm' } ],
+  // (1.11) بأمر Hilal: العربية بلا صوت ذكر — حُذف kareem من المعروض وبقي
+  // «نظام الهاتف» وحده (يُدفع ar-system أدناه عند توفّره على الجهاز)،
+  // والإنجليزية بلا ذكر — حُذف ryan وبقيت amy وحدها.
+  ar: [ ],
+  en: [ { id: 'en_US-amy-medium', g: 'f' } ],
   hi: [ { id: 'hi_IN-priyamvada-medium', g: 'f' }, { id: 'hi_IN-pratham-medium', g: 'm' } ],
   ur: [ { id: 'ur_PK-aegis_female-medium', g: 'f' }, { id: 'ur_PK-fasih-medium', g: 'm' } ]
 };
@@ -416,6 +419,49 @@ function matchPhrase(text, lang) {
 // oman-full؛ بقية الاقتراحات (العبارات الضبابية وبقية مداخل الأصول)
 // تبقى معلّقة كما هي حرفيًا.
 function wordRuleFix(text, lang) {
+  // (1.11) بأمر Hilal الصريح من واقعته الحية: قال «where» فسمعها Whisper
+  // «were» («You were now.») فترجمها NLLB إلى هراء («لقد كنتِ الآن»).
+  // (1.12) القاعدة صارت ذكية حارسة للسياق بأمره («لماذا لا تبقى were في
+  // سياقها الحقيقي»): لا تنقلب «were» إلى «where» إلا بدليل قوي من
+  // جيرانها — أن يتبعها فعل مساعد (are/is/do/does/did) أو «now» (ماضٍ
+  // مع «الآن» تناقض) — وتبقى في سياقها الحقيقي: قبل فعلٍ بصيغة الماضي
+  // أو الـing، وقبل there/here/the/not وأمثالها، وبعد if، وفي آخر
+  // الجملة. الافتراضي عند الشك هو الإبقاء: فات قلبٌ يبقى ظاهرًا في
+  // مربع النص قابلًا لتصحيحه بيده، أما قلبٌ خاطئ فيفسد جملة سليمة.
+  if (lang === 'en') {
+    if (!text) return null;
+    var ep = String(text).split(/(\s+|[?.,!;:'"“”‘’()…\-]+)/);
+    var wi = []; // مواضع الكلمات فقط بالترتيب (كما في pairRuleFix)
+    for (var k = 0; k < ep.length; k++) {
+      if (ep[k] && !/^[\s?.,!;:'"“”‘’()…\-]+$/.test(ep[k])) wi.push(k);
+    }
+    var PART = {been:1,done:1,gone:1,seen:1,told:1,given:1,taken:1,made:1,sent:1,built:1,written:1,known:1,shown:1,born:1,set:1,put:1,cut:1,held:1,kept:1,left:1,found:1,brought:1,bought:1,sold:1,paid:1,said:1,heard:1,met:1,lost:1,won:1,read:1,spoken:1,broken:1,chosen:1,driven:1,eaten:1,forgotten:1,hidden:1,beaten:1,begun:1,drawn:1,grown:1,thrown:1,worn:1,torn:1,stolen:1,understood:1,come:1,become:1,run:1,sat:1,stood:1};
+    var PRON = {you:1,we:1,they:1,he:1,she:1,it:1,i:1};
+    var KEEPNEXT = {there:1,here:1,the:1,a:1,an:1,not:1,so:1,very:1,too:1,just:1,already:1,still:1,all:1,both:1};
+    var ec = false;
+    for (var w = 0; w < wi.length; w++) {
+      var idx = wi[w];
+      if (!/^were$/i.test(ep[idx])) continue;
+      var prev = w > 0 ? ep[wi[w - 1]].toLowerCase() : '';
+      var next = w + 1 < wi.length ? ep[wi[w + 1]].toLowerCase() : '';
+      var after = w + 2 < wi.length ? ep[wi[w + 2]].toLowerCase() : '';
+      var flip = false;
+      if (next === 'are' || next === 'is' || next === 'do' || next === 'does' || next === 'did') flip = true;
+      else if (next === 'now') flip = true;
+      else if (PRON[next] && after === 'now') flip = true;
+      else if (prev === 'if') flip = false;
+      else {
+        var subj = PRON[next] ? after : next;
+        if (!subj) flip = false;
+        else if (/ing$/.test(subj)) flip = false;
+        else if (/ed$/.test(subj) || PART[subj]) flip = false;
+        else if (KEEPNEXT[subj]) flip = false;
+        else flip = false; // الافتراضي: إبقاء — الحارس متحفّظ
+      }
+      if (flip) { ep[idx] = ep[idx].charAt(0) === 'W' ? 'Where' : 'where'; ec = true; }
+    }
+    return ec ? ep.join('') : null;
+  }
   if (lang !== 'ar' || !text) return null;
   var parts = String(text).split(/(\s+|[؟?.,!،؛:;«»"“”'’()…\-]+)/);
   var changed = false;
@@ -445,6 +491,17 @@ function pairRuleFix(text, lang) {
     }
   }
   return changed ? parts.join('') : null;
+}
+// قاعدة إخراج عربي (1.13): نموذج NLLB يكتب المخاطَب المؤنث «أنتِ» بكسر
+// التاء افتراضيًا، فينطقها محرك نطق النظام «anti» كأنها «انتي» — واقعة
+// Hilal الحية (2026-11-26): قال "Where are you?" فجاءت الترجمة «أين
+// أنتِ؟». المخاطب عند Hilal مذكّر: تُستبدل كسرة تاء «أنتِ» بفتحةٍ
+// «أنتَ» في نص الترجمة العربية وحدها (لا في النص المسموع — ذاك ما
+// قيل فعلًا ولا يُمسّ). الحروف نفسها لا تتغير؛ علامة التشكيل وحدها،
+// فينطقها النظام «anta» كما يجب.
+function arTargetFix(text, tgt) {
+  if (tgt !== 'ar' || !text) return text;
+  return String(text).replace(/أنتِ/g, 'أنتَ');
 }
 // مسار العبارات الجاهزة التلقائي (إصلاح 1.1): لا يعمل إلا على تطابق كامل للنص
 // كله مع عبارة واحدة بعد التطبيع — لا تطابق جزئي ولا «أقرب عبارة» أبدًا.
@@ -975,7 +1032,8 @@ function finishRecording(S, auto) {
     } else {
       // القواعد التلقائية (1.9، بأمرَي Hilal المتتابعين): زوج «سلطانة أمان»
       // ← «سلطنة عُمان» (pairRuleFix) وكلمة «الن» المستقلة ← «الآن»
-      // (wordRuleFix) — تُكتب المصحَّحات في مربع النص نفسه ظاهرة للمستخدم،
+      // (wordRuleFix) — وانضمت إليها في 1.11 بأمره قاعدة «were» ← «where»
+      // في النص الإنجليزي (wordRuleFix نفسه) — تُكتب المصحَّحات في مربع النص نفسه ظاهرة للمستخدم،
       // وتتابع الترجمة فورًا بلا انتظار قبول/تجاهل. هاتان القاعدتان (ومدخل
       // oman-full أعلاه) وحدهما تلقائية؛ ما عداها يبقى اقتراحًا معلّقًا.
       var af = text;
@@ -1003,6 +1061,7 @@ function runTranslation(S, speakAfter) {
   var O = sides[otherKey(S.key)];
   var src = S.lang, tgt = O.lang;
   var done = function (result) {
+    result = arTargetFix(result, tgt);
     S.lastTranslation = result;
     S.el.translation.textContent = result;
     refreshSendButtons();
@@ -1021,6 +1080,7 @@ function runTranslation(S, speakAfter) {
   mtEngine.request({ type: 'mt', text: text, srcLang: LANGS[src].nllb, tgtLang: LANGS[tgt].nllb },
     function (p) {
       // جزئية وصلت (مرتبة حتمًا): اعرضها فورًا وادفعها لطابور النطق
+      p.text = arTargetFix(p.text, tgt);
       parts[p.index] = p.text;
       arrived++;
       var shown = parts.filter(function (x) { return typeof x === 'string'; }).join(' ');
@@ -1032,6 +1092,7 @@ function runTranslation(S, speakAfter) {
       if (session) session.push(p.text);
     })
     .then(function (result) {
+      result = arTargetFix(result, tgt);
       S.lastTranslation = result;
       S.el.translation.textContent = result;
       refreshSendButtons();
